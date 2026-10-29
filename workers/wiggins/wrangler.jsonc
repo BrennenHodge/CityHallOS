@@ -1,0 +1,12 @@
+{
+  // wiggins.cityhallos.com: pass-through to the Wiggins preview Worker.
+  //   cd workers/wiggins && npx wrangler deploy
+  "name": "wiggins-cityhallos",
+  "account_id": "d06c70a0b6279642a6243926161f574b",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-23",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "wiggins.cityhallos.com", "custom_domain": true }
+  ]
+}
