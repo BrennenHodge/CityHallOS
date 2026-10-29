@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CityHallOS — The AI operating system for City Hall</title>
+  <meta name="description" content="CityHallOS gives small and mid-sized cities a 24/7 AI City Clerk that answers residents, manages service requests, and helps staff get more done — without replacing your existing systems.">
+  <meta name="theme-color" content="#fbfaf6">
+  <link rel="canonical" href="https://cityhallos.com/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://cityhallos.com/">
+  <meta property="og:title" content="CityHallOS — A smarter way to run City Hall">
+  <meta property="og:description" content="A 24/7 AI City Clerk and request management platform built for small and mid-sized local governments.">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script>document.documentElement.classList.remove('no-js');</script>
+</head>
+<body>
+
+<!-- Icon sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5z"/><path d="M15 3v6h6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
+    <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></symbol>
+    <symbol id="i-landmark" viewBox="0 0 24 24"><path d="M3 22h18M5 18h14M6 18v-7M10 18v-7M14 18v-7M18 18v-7M12 2l9 6H3z"/></symbol>
+    <symbol id="i-briefcase" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2M2 13h20"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M8 16v-4M13 16V8M18 16v-7"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a6 6 0 0 1-12 0V8z"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m10.3 3.9-8.5 14.1A2 2 0 0 0 3.5 21h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></symbol>
+    <symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 3v18M7 21h10M3 7h18M6 7l-3 7a3 3 0 0 0 6 0zM18 7l-3 7a3 3 0 0 0 6 0z"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/></symbol>
+    <symbol id="i-access" viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2"/><path d="m5 8.5 7 1.5 7-1.5M12 10v4.5L9 21M12 14.5l3 6.5"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></symbol>
+    <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 9 4.5 3h15L21 9M3 9v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9M3 9h18M9 21v-6h6v6"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><circle cx="7" cy="7" r="1.5"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1zM4 22v-7"/></symbol>
+    <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></symbol>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="m1 6 7-4 8 4 7-4v16l-7 4-8-4-7 4z"/><path d="M8 2v16M16 6v16"/></symbol>
+  </defs>
+</svg>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- ================= NAV ================= -->
+<header class="nav" id="nav">
+  <div class="container nav-inner">
+    <a href="#top" class="brand" aria-label="CityHallOS home">
+      <img class="brand-mark" src="favicon.svg" alt="" width="32" height="32">
+      <span class="brand-name">CityHall<span>OS</span></span>
+    </a>
+    <nav aria-label="Primary">
+      <ul class="nav-links">
+        <li><a href="#platform">Platform</a></li>
+        <li><a href="#demo">Live demo</a></li>
+        <li><a href="#agents">AI agents</a></li>
+        <li><a href="#trust">Trust &amp; security</a></li>
+        <li><a href="#pricing">Pricing</a></li>
+        <li><a href="#pilot">Pilot program</a></li>
+      </ul>
+    </nav>
+    <div class="nav-cta">
+      <a href="#demo" class="btn btn-ghost btn-sm">Try the demo</a>
+      <a href="#contact" class="btn btn-primary btn-sm">Book a walkthrough</a>
+      <button class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="mobileMenu" aria-label="Open menu">
+        <svg class="icon"><use href="#i-menu"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<div class="mobile-menu" id="mobileMenu">
+  <a href="#platform">Platform</a>
+  <a href="#demo">Live demo</a>
+  <a href="#agents">AI agents</a>
+  <a href="#trust">Trust &amp; security</a>
+  <a href="#pricing">Pricing</a>
+  <a href="#pilot">Pilot program</a>
+  <a href="#contact" class="btn btn-primary">Book a walkthrough</a>
+</div>
+
+<main id="main">
+
+<!-- ================= HERO ================= -->
+<section class="hero" id="top">
+  <div class="hero-grid-bg" aria-hidden="true"></div>
+  <div class="container hero-inner">
+    <div>
+      <a class="pill-badge" href="#pilot"><b>Now enrolling</b> 90-day pilots for Mississippi cities &amp; towns</a>
+      <h1>Your City Hall.<br><span class="serif">Now powered by AI.</span></h1>
+      <p class="lede">Give your city a 24/7 AI City Clerk that answers questions, manages service requests, and helps your staff get more done — without replacing the systems you already use.</p>
+      <div class="hero-actions">
+        <a href="#demo" class="btn btn-primary">See CityHallOS in action <svg class="icon"><use href="#i-arrow"/></svg></a>
+        <a href="#pilot" class="btn btn-ghost">Start a pilot</a>
+      </div>
+      <ul class="hero-proof">
+        <li><svg class="icon"><use href="#i-check"/></svg>Built for towns of 2,000–25,000</li>
+        <li><svg class="icon"><use href="#i-check"/></svg>Answers cite your own ordinances</li>
+        <li><svg class="icon"><use href="#i-check"/></svg>Humans approve what matters</li>
+      </ul>
+    </div>
+
+    <div class="hero-visual" id="heroVisual" aria-label="Animated example: a resident reports a pothole, CityHallOS creates and routes a request, and the resident is updated as staff resolve it." role="img">
+      <div class="hv-card hv-chat" aria-hidden="true">
+        <div class="hv-chat-head">
+          <div class="hv-avatar"><svg class="icon"><use href="#i-landmark"/></svg></div>
+          <div>
+            <div class="hv-title">Ask City Hall</div>
+            <div class="hv-sub">AI City Clerk · online 24/7</div>
+          </div>
+        </div>
+        <div class="hv-body">
+          <div class="bubble me hv-step" data-step="1">There's a big pothole on Main Street near the elementary school.</div>
+          <div class="bubble ai hv-step" data-step="2" data-typing><span class="dots"><i></i><i></i><i></i></span><span class="txt">Thanks for reporting it. I'll send this to Public Works. What's the nearest cross street?</span></div>
+          <div class="bubble me hv-step" data-step="4">Main &amp; School Rd</div>
+          <div class="bubble sys hv-step" data-step="5"><svg class="icon"><use href="#i-check"/></svg><span>Request <b class="mono">#CB-1042</b> created and routed to Public Works. We'll email you updates.</span></div>
+          <div class="bubble update hv-step" data-step="8"><svg class="icon"><use href="#i-bell"/></svg><span><b>Update:</b> A crew repaired the pothole on Main &amp; School Rd. Thanks for helping Cedar Bend.</span></div>
+        </div>
+      </div>
+
+      <div class="hv-float hv-float-1 hv-step" data-step="5" aria-hidden="true">
+        <span class="dot"><svg class="icon"><use href="#i-spark"/></svg></span>
+        <span>Auto-routed<small>Public Works · Street maintenance</small></span>
+      </div>
+
+      <div class="hv-card hv-inbox hv-step" data-step="6" aria-hidden="true">
+        <div class="hv-inbox-head"><span>Staff inbox</span><span>Public Works</span></div>
+        <div class="hv-req">
+          <div class="hv-req-top">
+            <span class="hv-req-id">#CB-1042 · just now</span>
+            <span class="status new" id="hvStatus">New</span>
+          </div>
+          <h4>Pothole — Main St &amp; School Rd</h4>
+          <div class="hv-meta">
+            <span class="tag ai"><svg class="icon"><use href="#i-spark"/></svg>AI summary</span>
+            <span class="tag"><svg class="icon"><use href="#i-pin"/></svg>School zone</span>
+            <span class="tag"><svg class="icon"><use href="#i-flag"/></svg>High priority</span>
+          </div>
+        </div>
+        <div class="hv-progress"><span id="hvp1"></span><span id="hvp2"></span><span id="hvp3"></span><span id="hvp4"></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CHANNELS STRIP ================= -->
+<section class="strip" aria-label="Unified channels">
+  <div class="container strip-inner">
+    <p class="strip-label"><b>Every way residents reach City Hall</b> — finally in one place.</p>
+    <div class="channels">
+      <span class="channel"><svg class="icon"><use href="#i-phone"/></svg>Phone calls</span>
+      <span class="channel"><svg class="icon"><use href="#i-mail"/></svg>Email</span>
+      <span class="channel"><svg class="icon"><use href="#i-globe"/></svg>Website</span>
+      <span class="channel"><svg class="icon"><use href="#i-chat"/></svg>Social media</span>
+      <span class="channel"><svg class="icon"><use href="#i-users"/></svg>Walk-ins</span>
+      <span class="channel"><svg class="icon"><use href="#i-note"/></svg>Sticky notes</span>
+      <svg class="icon channel-arrow" aria-hidden="true"><use href="#i-arrow"/></svg>
+      <span class="channel unified"><svg class="icon"><use href="#i-inbox"/></svg>CityHallOS</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PROBLEM ================= -->
+<section class="section" id="problem">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">The problem</span>
+      <h2>Small towns do big-city work with a <span class="serif">fraction</span> of the staff.</h2>
+      <p class="lede">One city clerk might answer the phone, process paperwork, manage licenses, prep council meetings and keep the records — all before lunch. The work isn't the problem. The way it reaches City Hall is.</p>
+    </div>
+    <div class="problem-grid reveal">
+      <article class="problem">
+        <div class="icon-wrap"><svg class="icon"><use href="#i-route"/></svg></div>
+        <span class="problem-num">01</span>
+        <h3>Fragmented communication</h3>
+        <p>Requests arrive by phone, email, Facebook and the front counter, with no single way to capture, track and resolve them.</p>
+      </article>
+      <article class="problem">
+        <div class="icon-wrap"><svg class="icon"><use href="#i-history"/></svg></div>
+        <span class="problem-num">02</span>
+        <h3>The same questions, every day</h3>
+        <p>Staff repeat office hours, trash days and permit rules, chase missing documents, and re-type information into other systems.</p>
+      </article>
+      <article class="problem">
+        <div class="icon-wrap"><svg class="icon"><use href="#i-users"/></svg></div>
+        <span class="problem-num">03</span>
+        <h3>Limited staff capacity</h3>
+        <p>Smaller cities can't justify a specialist for every function, so a few people carry the full administrative load.</p>
+      </article>
+      <article class="problem">
+        <div class="icon-wrap"><svg class="icon"><use href="#i-file"/></svg></div>
+        <span class="problem-num">04</span>
+        <h3>Knowledge scattered everywhere</h3>
+        <p>Answers live in ordinances, PDFs, meeting minutes, old websites — and in the heads of long-time employees.</p>
+      </article>
+      <article class="problem">
+        <div class="icon-wrap"><svg class="icon"><use href="#i-eye"/></svg></div>
+        <span class="problem-num">05</span>
+        <h3>Residents left wondering</h3>
+        <p>Once a request is made, residents rarely know whether it was received, assigned or fixed — so they call again.</p>
+      </article>
+      <article class="problem">
+        <div class="icon-wrap"><svg class="icon"><use href="#i-layers"/></svg></div>
+        <span class="problem-num">06</span>
+        <h3>Software that's hard to adopt</h3>
+        <p>Traditional government software means long configurations, painful migrations and training nobody has time for.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PHILOSOPHY ================= -->
+<section class="band" aria-label="Product philosophy">
+  <div class="container band-inner reveal">
+    <blockquote>The resident explains the problem.<br><span class="serif">CityHallOS figures out the process.</span></blockquote>
+    <p>Residents describe what they need in plain language. They never have to know which department, form or ordinance applies. That's our job.</p>
+  </div>
+</section>
+
+<!-- ================= PLATFORM ================= -->
+<section class="section" id="platform">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">The platform</span>
+      <h2>Not a chatbot. An operating system for City Hall.</h2>
+      <p class="lede">CityHallOS connects resident conversations to real work: requests, assignments, approvals and follow-up — with your staff in control at every step.</p>
+    </div>
+    <div class="pillars">
+      <article class="pillar reveal">
+        <div class="pillar-art art-agents" aria-hidden="true">
+          <span><svg class="icon"><use href="#i-file"/></svg></span>
+          <span><svg class="icon"><use href="#i-wrench"/></svg></span>
+          <span><svg class="icon icon-lg"><use href="#i-landmark"/></svg></span>
+          <span><svg class="icon"><use href="#i-calendar"/></svg></span>
+          <span><svg class="icon"><use href="#i-store"/></svg></span>
+        </div>
+        <span class="pillar-tag">01 — AI workforce</span>
+        <h3>An AI administrative team</h3>
+        <p>Specialized AI agents handle the repetitive work — answering, collecting, drafting and routing — so employees can focus on the work only people can do.</p>
+        <ul>
+          <li><svg class="icon"><use href="#i-check"/></svg>Answers grounded in your documents</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Completes routine workflows end to end</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Escalates to a person when unsure</li>
+        </ul>
+      </article>
+      <article class="pillar reveal">
+        <div class="pillar-art art-flow" aria-hidden="true">
+          <div><b></b>New request · Pothole</div>
+          <div><b></b>Assigned · Public Works</div>
+          <div><b></b>Resolved · Resident notified</div>
+        </div>
+        <span class="pillar-tag">02 — Unified workflow</span>
+        <h3>One place for all the work</h3>
+        <p>Every request, task, document and approval becomes a structured record your team can assign, track and close — with a full history.</p>
+        <ul>
+          <li><svg class="icon"><use href="#i-check"/></svg>Shared request inbox for every department</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Rules-based routing and priorities</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Dashboards built around action, not vanity</li>
+        </ul>
+      </article>
+      <article class="pillar reveal">
+        <div class="pillar-art art-portal" aria-hidden="true">
+          <span class="q">When is trash pickup on Oak St?</span>
+          <span class="lbl">#CB-1038 · Streetlight repair</span>
+          <span class="track"><i></i><i></i><i></i><i></i></span>
+        </div>
+        <span class="pillar-tag">03 — Resident portal</span>
+        <h3>City Hall that's always open</h3>
+        <p>Residents ask questions, report issues, upload photos and check the status of their requests any time, from any device.</p>
+        <ul>
+          <li><svg class="icon"><use href="#i-check"/></svg>Plain-language conversations</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Instant confirmations and tracking IDs</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Automatic status updates</li>
+        </ul>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ================= LIVE DEMO ================= -->
+<section class="section demo-section" id="demo">
+  <div class="container">
+    <div class="section-head center reveal">
+      <span class="eyebrow">Live demo</span>
+      <h2>Be the resident. Then be the clerk.</h2>
+      <p class="lede">Talk to the AI City Clerk for Cedar Bend on the left, then watch your request land in the staff console on the right. Assign it, work it, resolve it — and see the resident get updated.</p>
+      <span class="demo-note"><svg class="icon"><use href="#i-alert"/></svg>Cedar Bend is a fictional town. Demo data only.</span>
+    </div>
+
+    <div class="demo-tabs" role="tablist" aria-label="Demo views">
+      <button role="tab" id="tabRes" aria-selected="true" aria-controls="paneRes"><svg class="icon icon-sm"><use href="#i-user"/></svg>Resident <span class="badge" id="resBadge">0</span></button>
+      <button role="tab" id="tabStaff" aria-selected="false" aria-controls="paneStaff"><svg class="icon icon-sm"><use href="#i-grid"/></svg>City staff <span class="badge" id="staffBadge">0</span></button>
+    </div>
+
+    <div class="demo reveal">
+      <!-- Resident -->
+      <div class="demo-pane" id="paneRes" role="tabpanel" aria-labelledby="tabRes">
+        <div class="pane-bar">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="pane-url">cedarbend.gov/ask</span>
+          <span class="pane-label res">Resident</span>
+        </div>
+        <div class="r-head">
+          <div class="town-seal" aria-hidden="true">CB</div>
+          <div>
+            <div class="t">Ask City Hall · Town of Cedar Bend</div>
+            <div class="s">AI City Clerk · answers from official town sources</div>
+          </div>
+        </div>
+        <div class="r-log" id="rLog" aria-live="polite" aria-label="Conversation with the AI City Clerk"></div>
+        <div class="r-chips" id="rChips"></div>
+        <form class="r-input" id="rForm" autocomplete="off">
+          <label for="rText" class="sr-only">Message the AI City Clerk</label>
+          <input id="rText" type="text" placeholder="Ask a question or describe a problem…" maxlength="240">
+          <button type="submit" aria-label="Send message"><svg class="icon"><use href="#i-send"/></svg></button>
+        </form>
+      </div>
+
+      <!-- Staff -->
+      <div class="demo-pane" id="paneStaff" role="tabpanel" aria-labelledby="tabStaff">
+        <div class="pane-bar">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="pane-url">app.cityhallos.com/cedar-bend/requests</span>
+          <span class="pane-label staff">City staff</span>
+        </div>
+        <div class="s-body">
+          <aside class="s-side" aria-label="Console navigation (illustrative)">
+            <div class="s-side-group">Overview</div>
+            <div class="s-side-item"><svg class="icon"><use href="#i-grid"/></svg>Dashboard</div>
+            <div class="s-side-item"><svg class="icon"><use href="#i-spark"/></svg>AI activity</div>
+            <div class="s-side-group">Operations</div>
+            <div class="s-side-item active"><svg class="icon"><use href="#i-inbox"/></svg>Requests <span class="count" id="sideCount">3</span></div>
+            <div class="s-side-item"><svg class="icon"><use href="#i-check"/></svg>Tasks</div>
+            <div class="s-side-item"><svg class="icon"><use href="#i-landmark"/></svg>Departments</div>
+            <div class="s-side-group">AI</div>
+            <div class="s-side-item"><svg class="icon"><use href="#i-book"/></svg>Knowledge base</div>
+            <div class="s-side-item"><svg class="icon"><use href="#i-route"/></svg>Routing rules</div>
+            <div class="s-side-group">Admin</div>
+            <div class="s-side-item"><svg class="icon"><use href="#i-history"/></svg>Audit log</div>
+          </aside>
+          <div class="s-main">
+            <div class="s-top">
+              <h4>Requests</h4>
+              <div class="who"><i aria-hidden="true">DR</i>Dana Reyes, City Clerk</div>
+            </div>
+            <div class="kpis">
+              <div class="kpi"><small>Open requests</small><b id="kOpen">3</b></div>
+              <div class="kpi"><small>Needs a human</small><b id="kHuman">1</b></div>
+              <div class="kpi"><small>Questions answered by AI</small><b id="kAnswered">0</b></div>
+              <div class="kpi"><small>Resolved today</small><b id="kResolved">0</b></div>
+            </div>
+            <div class="s-split">
+              <div class="inbox" id="inbox" role="list" aria-label="Request inbox">
+                <div class="inbox-head"><span>Inbox</span><span id="inboxCount">3 open</span></div>
+              </div>
+              <div class="detail" id="detail" aria-live="polite">
+                <div class="detail-empty">
+                  <svg class="icon"><use href="#i-inbox"/></svg>
+                  Select a request to see the AI summary, details and activity timeline.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-foot">
+      <span><svg class="icon"><use href="#i-book"/></svg>Answers cite town sources</span>
+      <span><svg class="icon"><use href="#i-route"/></svg>Requests auto-routed by rules</span>
+      <span><svg class="icon"><use href="#i-alert"/></svg>Try asking something it can't answer</span>
+      <button class="demo-reset" id="demoReset" type="button">Reset demo</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HOW IT WORKS ================= -->
+<section class="section" id="how">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">How it works</span>
+      <h2>From “there’s a pothole” to “it’s fixed.”</h2>
+      <p class="lede">Every resident interaction becomes a structured, trackable request — routed by your rules, handled by your people, and closed with a notification.</p>
+    </div>
+    <div class="flow reveal">
+      <div class="flow-step">
+        <div class="flow-icon"><svg class="icon"><use href="#i-chat"/></svg></div>
+        <div><span class="n">01</span><h3>Resident asks</h3><p>On your website, in plain language — any hour of the day.</p></div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-icon"><svg class="icon"><use href="#i-spark"/></svg></div>
+        <div><span class="n">02</span><h3>AI understands</h3><p>Identifies the intent: a question, a service request or a permit.</p></div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-icon"><svg class="icon"><use href="#i-camera"/></svg></div>
+        <div><span class="n">03</span><h3>Collects details</h3><p>Location, description, photos and contact info — nothing missing.</p></div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-icon"><svg class="icon"><use href="#i-route"/></svg></div>
+        <div><span class="n">04</span><h3>Routes the work</h3><p>Creates a request and places it in the right department's queue.</p></div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-icon"><svg class="icon"><use href="#i-user"/></svg></div>
+        <div><span class="n">05</span><h3>Staff take action</h3><p>Review the AI summary, assign, update and resolve.</p></div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-icon"><svg class="icon"><use href="#i-bell"/></svg></div>
+        <div><span class="n">06</span><h3>Resident updated</h3><p>Automatic status updates, from received to resolved.</p></div>
+      </div>
+    </div>
+    <div class="flow-callout reveal">
+      <div class="callout warn">
+        <div class="icon-wrap"><svg class="icon"><use href="#i-users"/></svg></div>
+        <div><h4>Not sure? It asks a human.</h4><p>When the right department or jurisdiction isn't clear, the request goes to a human triage queue instead of guessing.</p></div>
+      </div>
+      <div class="callout danger">
+        <div class="icon-wrap"><svg class="icon"><use href="#i-alert"/></svg></div>
+        <div><h4>Emergencies skip the line.</h4><p>Safety-critical messages immediately direct residents to 911 and emergency services — never ordinary automation.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= AGENTS ================= -->
+<section class="section" id="agents" style="background: var(--paper-2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">AI agents</span>
+      <h2>A specialist for every desk at City Hall.</h2>
+      <p class="lede">Each agent shares your city's knowledge base and workflow engine. Start with the AI City Clerk, then add specialists as you grow.</p>
+    </div>
+    <div class="agents">
+      <article class="agent featured reveal">
+        <div class="agent-top">
+          <div class="agent-icon"><svg class="icon icon-lg"><use href="#i-landmark"/></svg></div>
+          <span class="phase live">Available now</span>
+        </div>
+        <h3 style="font-size:1.6rem">AI City Clerk</h3>
+        <p>Your front desk that never closes. It doesn't just answer — it completes routine work from start to finish.</p>
+        <ul>
+          <li><svg class="icon"><use href="#i-check"/></svg>Answers common questions with cited sources</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Handles website chats and assists with calls</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Finds the right forms and documents</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Collects information and creates service requests</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Routes inquiries to the right department</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Drafts correspondence for staff to send</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Escalates complex matters to employees</li>
+        </ul>
+        <div class="guard"><svg class="icon"><use href="#i-shield"/></svg>Says “I don't know” instead of inventing policy.</div>
+      </article>
+      <article class="agent reveal">
+        <div class="agent-top">
+          <div class="agent-icon"><svg class="icon"><use href="#i-file"/></svg></div>
+          <span class="phase">Coming in Phase 3</span>
+        </div>
+        <h3>Permitting Coordinator</h3>
+        <p>Explains requirements, checks applications for completeness, pulls zoning rules and requests missing documents.</p>
+        <div class="guard"><svg class="icon"><use href="#i-shield"/></svg>Never approves or denies permits. Officials decide.</div>
+      </article>
+      <article class="agent reveal">
+        <div class="agent-top">
+          <div class="agent-icon"><svg class="icon"><use href="#i-wrench"/></svg></div>
+          <span class="phase">Coming in Phase 3</span>
+        </div>
+        <h3>Public Works Dispatcher</h3>
+        <p>Takes reports of potholes, leaks, downed trees and broken signs, then creates and tracks work orders.</p>
+        <div class="guard"><svg class="icon"><use href="#i-shield"/></svg>Recommends assignments; supervisors confirm.</div>
+      </article>
+      <article class="agent reveal">
+        <div class="agent-top">
+          <div class="agent-icon"><svg class="icon"><use href="#i-search"/></svg></div>
+          <span class="phase">Coming in Phase 3</span>
+        </div>
+        <h3>Records Assistant</h3>
+        <p>Takes public records requests, finds responsive documents, drafts responses and flags possible exemptions.</p>
+        <div class="guard"><svg class="icon"><use href="#i-shield"/></svg>Every disclosure goes through human review.</div>
+      </article>
+      <article class="agent reveal">
+        <div class="agent-top">
+          <div class="agent-icon"><svg class="icon"><use href="#i-calendar"/></svg></div>
+          <span class="phase">Coming in Phase 3</span>
+        </div>
+        <h3>Meeting Secretary</h3>
+        <p>Drafts agendas, organizes packets, summarizes recordings, drafts minutes and assigns follow-up items.</p>
+        <div class="guard"><svg class="icon"><use href="#i-shield"/></svg>Official minutes follow your approval process.</div>
+      </article>
+      <article class="agent reveal">
+        <div class="agent-top">
+          <div class="agent-icon"><svg class="icon"><use href="#i-store"/></svg></div>
+          <span class="phase">Coming in Phase 3</span>
+        </div>
+        <h3>Business Licensing Assistant</h3>
+        <p>Guides local businesses through licensing, flags missing documents, tracks renewals and drafts reminders.</p>
+        <div class="guard"><svg class="icon"><use href="#i-shield"/></svg>Applications are routed to staff for review.</div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ROLES ================= -->
+<section class="section" id="roles">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">Built for everyone at City Hall</span>
+      <h2>Simple for residents. Powerful for staff.</h2>
+    </div>
+    <div class="roles reveal">
+      <div class="role-tabs" role="tablist" aria-label="Who CityHallOS is for">
+        <button class="role-tab" role="tab" aria-selected="true" aria-controls="rolePanel" data-role="clerk"><svg class="icon"><use href="#i-file"/></svg>City clerks &amp; staff</button>
+        <button class="role-tab" role="tab" aria-selected="false" aria-controls="rolePanel" data-role="mayor"><svg class="icon"><use href="#i-landmark"/></svg>Mayors &amp; administrators</button>
+        <button class="role-tab" role="tab" aria-selected="false" aria-controls="rolePanel" data-role="dept"><svg class="icon"><use href="#i-wrench"/></svg>Departments</button>
+        <button class="role-tab" role="tab" aria-selected="false" aria-controls="rolePanel" data-role="resident"><svg class="icon"><use href="#i-users"/></svg>Residents</button>
+        <button class="role-tab" role="tab" aria-selected="false" aria-controls="rolePanel" data-role="biz"><svg class="icon"><use href="#i-briefcase"/></svg>Businesses &amp; contractors</button>
+      </div>
+      <div class="role-panel" id="rolePanel" role="tabpanel" aria-live="polite"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TRUST ================= -->
+<section class="section trust" id="trust">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">Trust &amp; security</span>
+      <h2>AI that knows its limits.</h2>
+      <p class="lede">Government runs on trust. CityHallOS is designed so AI does the busywork and people make the decisions — with every action on the record.</p>
+    </div>
+    <div class="trust-grid">
+      <div class="guarantees reveal">
+        <div class="guarantee"><svg class="icon"><use href="#i-book"/></svg><h3>Every answer has a source</h3><p>Policy and ordinance answers reference the document they came from — and clearly flag anything uncertain or missing.</p></div>
+        <div class="guarantee"><svg class="icon"><use href="#i-users"/></svg><h3>Humans approve what matters</h3><p>Consequential decisions are always routed to authorized officials for review and sign-off.</p></div>
+        <div class="guarantee"><svg class="icon"><use href="#i-lock"/></svg><h3>Your city's data stays yours</h3><p>Each municipality is fully isolated, with encryption in transit and at rest and role-based access control.</p></div>
+        <div class="guarantee"><svg class="icon"><use href="#i-history"/></svg><h3>A complete audit trail</h3><p>Every AI action, status change and staff edit is logged, with retention controls and public-records export.</p></div>
+        <div class="guarantee"><svg class="icon"><use href="#i-shield"/></svg><h3>Guarded AI permissions</h3><p>You decide what each agent can do. Protections against prompt injection and unauthorized tool use are built in.</p></div>
+        <div class="guarantee"><svg class="icon"><use href="#i-access"/></svg><h3>Accessible to every resident</h3><p>Designed to WCAG 2.2 AA standards and responsive on desktop, tablet and mobile.</p></div>
+      </div>
+      <aside class="never reveal">
+        <h3>What CityHallOS AI never does</h3>
+        <p>Some decisions belong to people. Full stop.</p>
+        <ul>
+          <li><span class="x"><svg class="icon"><use href="#i-x"/></svg></span>Approve or deny permits and licenses</li>
+          <li><span class="x"><svg class="icon"><use href="#i-x"/></svg></span>Make legal or statutory determinations</li>
+          <li><span class="x"><svg class="icon"><use href="#i-x"/></svg></span>Handle emergencies instead of 911</li>
+          <li><span class="x"><svg class="icon"><use href="#i-x"/></svg></span>Publish official minutes or notices without approval</li>
+          <li><span class="x"><svg class="icon"><use href="#i-x"/></svg></span>Release records without human review</li>
+          <li><span class="x"><svg class="icon"><use href="#i-x"/></svg></span>Invent policy when the answer isn't in your documents</li>
+        </ul>
+        <p class="foot">Data handling, retention, recording consent and procurement are reviewed against applicable federal, state and local rules before every deployment.</p>
+      </aside>
+    </div>
+    <div class="compliance reveal">
+      <span><svg class="icon"><use href="#i-check"/></svg>Tenant data isolation</span>
+      <span><svg class="icon"><use href="#i-check"/></svg>Encryption in transit &amp; at rest</span>
+      <span><svg class="icon"><use href="#i-check"/></svg>Role-based access</span>
+      <span><svg class="icon"><use href="#i-check"/></svg>Audit logs</span>
+      <span><svg class="icon"><use href="#i-check"/></svg>Retention controls</span>
+      <span><svg class="icon"><use href="#i-check"/></svg>WCAG 2.2 AA target</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= INTEGRATIONS ================= -->
+<section class="section" id="integrations">
+  <div class="container integrate">
+    <div class="section-head reveal">
+      <span class="eyebrow">No rip-and-replace</span>
+      <h2>Works on top of what you already have.</h2>
+      <p class="lede">CityHallOS is an intelligent layer above your existing systems — not another migration. Keep your billing, accounting and records software. We'll connect to it.</p>
+      <ul class="integrate-points">
+        <li><svg class="icon"><use href="#i-check"/></svg>Go live without migrating your data</li>
+        <li><svg class="icon"><use href="#i-check"/></svg>Upload your ordinances, forms and FAQs — we organize them</li>
+        <li><svg class="icon"><use href="#i-check"/></svg>Built for nontechnical teams: no IT department required</li>
+      </ul>
+    </div>
+    <div class="stack reveal" aria-label="Architecture diagram">
+      <div class="stack-layer">
+        <div class="lbl"><span>Residents &amp; businesses</span><span>Channels</span></div>
+        <div class="stack-row">
+          <span><svg class="icon"><use href="#i-globe"/></svg>Web chat</span>
+          <span><svg class="icon"><use href="#i-mail"/></svg>Email</span>
+          <span><svg class="icon"><use href="#i-phone"/></svg>Voice <em style="font-style:normal;color:var(--faint)">· soon</em></span>
+          <span><svg class="icon"><use href="#i-chat"/></svg>SMS <em style="font-style:normal;color:var(--faint)">· soon</em></span>
+        </div>
+      </div>
+      <div class="stack-connector" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="stack-layer os">
+        <div class="lbl"><span>CityHallOS</span><span>Your city's private workspace</span></div>
+        <div class="stack-row">
+          <span><svg class="icon"><use href="#i-spark"/></svg>AI agents</span>
+          <span><svg class="icon"><use href="#i-book"/></svg>Knowledge base</span>
+          <span><svg class="icon"><use href="#i-route"/></svg>Workflow &amp; routing</span>
+          <span><svg class="icon"><use href="#i-inbox"/></svg>Requests</span>
+          <span><svg class="icon"><use href="#i-history"/></svg>Audit log</span>
+        </div>
+      </div>
+      <div class="stack-connector" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="stack-layer existing">
+        <div class="lbl"><span>Your existing systems</span><span>Integrations</span></div>
+        <div class="stack-row">
+          <span><svg class="icon"><use href="#i-mail"/></svg>Email platform</span>
+          <span><svg class="icon"><use href="#i-db"/></svg>Document storage</span>
+          <span><svg class="icon"><use href="#i-file"/></svg>Permit software</span>
+          <span><svg class="icon"><use href="#i-map"/></svg>GIS</span>
+          <span><svg class="icon"><use href="#i-plug"/></svg>Utility &amp; finance</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ROADMAP ================= -->
+<section class="section" id="roadmap" style="padding-top:0">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">Roadmap</span>
+      <h2>Starts as a City Clerk. Grows into the OS for local government.</h2>
+    </div>
+    <div class="roadmap">
+      <article class="phase-card current reveal">
+        <div class="when"><span>Phase 1</span><b>NOW</b></div>
+        <h3>AI City Clerk</h3>
+        <p>Answer approved questions reliably and turn conversations into actionable requests.</p>
+        <ul>
+          <li>Municipal knowledge base</li>
+          <li>Resident AI assistant</li>
+          <li>Request management &amp; routing</li>
+          <li>Staff dashboard &amp; audit log</li>
+        </ul>
+      </article>
+      <article class="phase-card reveal">
+        <div class="when"><span>Phase 2</span></div>
+        <h3>Omnichannel City Hall</h3>
+        <p>Every channel flows into the same system.</p>
+        <ul>
+          <li>AI voice receptionist</li>
+          <li>Call summaries</li>
+          <li>Email intake &amp; SMS updates</li>
+          <li>Staff productivity reporting</li>
+        </ul>
+      </article>
+      <article class="phase-card reveal">
+        <div class="when"><span>Phase 3</span></div>
+        <h3>Specialized agents</h3>
+        <p>From communication into departmental workflows.</p>
+        <ul>
+          <li>Permitting coordinator</li>
+          <li>Business licensing</li>
+          <li>Public records</li>
+          <li>Public works &amp; meetings</li>
+        </ul>
+      </article>
+      <article class="phase-card reveal">
+        <div class="when"><span>Phase 4</span></div>
+        <h3>Municipal operating platform</h3>
+        <p>The foundation small cities run on.</p>
+        <ul>
+          <li>Third-party integrations</li>
+          <li>Workflow builder</li>
+          <li>Document processing</li>
+          <li>Cross-department reporting</li>
+        </ul>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PRICING ================= -->
+<section class="section" id="pricing" style="background: var(--paper-2); border-top: 1px solid var(--line);">
+  <div class="container">
+    <div class="section-head center reveal">
+      <span class="eyebrow">Pricing</span>
+      <h2>Big-city capabilities. Small-town budget.</h2>
+      <p class="lede">Simple monthly subscriptions. No new hires, no massive implementation project.</p>
+    </div>
+    <div class="pricing">
+      <article class="plan reveal">
+        <div><h3>Starter</h3><p class="plan-desc">Get residents answers around the clock.</p></div>
+        <div class="price"><b>$499</b><span class="per">/ month</span></div>
+        <ul>
+          <li><svg class="icon"><use href="#i-check"/></svg>AI website assistant</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Municipal knowledge base</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Source-cited answers</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Basic administration</li>
+        </ul>
+        <a href="#contact" class="btn btn-ghost" data-plan="Starter">Talk to us</a>
+      </article>
+      <article class="plan popular reveal">
+        <span class="plan-flag">MOST POPULAR</span>
+        <div><h3>Operations</h3><p class="plan-desc">Turn conversations into completed work.</p></div>
+        <div class="price"><b>$999</b><span class="per">/ month</span></div>
+        <ul>
+          <li><svg class="icon"><use href="#i-check"/></svg>Everything in Starter</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Unified request management</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Department routing rules</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Staff dashboard</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Resident status tracking</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Expanded usage &amp; integrations</li>
+        </ul>
+        <a href="#contact" class="btn btn-primary" data-plan="Operations">Start a pilot</a>
+      </article>
+      <article class="plan reveal">
+        <div><h3>CityHallOS Pro</h3><p class="plan-desc">A full AI administrative team.</p></div>
+        <div class="price"><b>$1,999</b><span class="per">+ / month</span></div>
+        <ul>
+          <li><svg class="icon"><use href="#i-check"/></svg>Everything in Operations</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Multiple specialized AI agents</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Advanced automation</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Voice, SMS &amp; more channels</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Department-specific workflows</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>Reporting &amp; integrations</li>
+        </ul>
+        <a href="#contact" class="btn btn-ghost" data-plan="Pro">Talk to us</a>
+      </article>
+    </div>
+    <p class="pricing-note">Onboarding and implementation are scoped to your city. Every engagement can begin with a structured 60–90 day pilot.</p>
+  </div>
+</section>
+
+<!-- ================= PILOT ================= -->
+<section class="section pilot" id="pilot">
+  <div class="container pilot-grid">
+    <div>
+      <div class="section-head reveal" style="margin-bottom:36px">
+        <span class="eyebrow">Pilot program</span>
+        <h2>Let us automate the most repetitive work coming into your City Hall.</h2>
+        <p class="lede">A structured 60–90 day pilot. We measure where your staff time goes today, launch CityHallOS, and show you the difference with your own numbers.</p>
+      </div>
+      <div class="pilot-steps reveal">
+        <div class="pilot-step"><span class="wk">WK 0–2</span><div><h3>Measure your baseline</h3><p>We document inquiry volume, time spent on routine questions, request counts, response times and your most repetitive processes.</p></div></div>
+        <div class="pilot-step"><span class="wk">WK 2–4</span><div><h3>Load your city's knowledge</h3><p>Upload ordinances, forms, office hours and FAQs. We configure departments, staff and routing rules with you.</p></div></div>
+        <div class="pilot-step"><span class="wk">WK 4–12</span><div><h3>Go live and improve</h3><p>Your AI City Clerk goes live on your website. We review answers, escalations and routing with your team every week.</p></div></div>
+        <div class="pilot-step"><span class="wk">END</span><div><h3>Compare the results</h3><p>A clear before-and-after report your council can read — then decide whether to continue.</p></div></div>
+      </div>
+    </div>
+    <div class="measure reveal">
+      <h3>What we measure, before and after</h3>
+      <p>No vanity metrics. Only the numbers that show whether your staff got time back.</p>
+      <table class="measure-table">
+        <thead><tr><th scope="col">Metric</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
+        <tbody>
+          <tr><td>Weekly resident inquiries</td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td></tr>
+          <tr><td>Staff time on routine questions</td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td></tr>
+          <tr><td>Average first response time</td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td></tr>
+          <tr><td>Time to resolve requests</td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td></tr>
+          <tr><td>Requests routed correctly</td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td></tr>
+          <tr><td>AI answers grounded in sources</td><td>—</td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td></tr>
+          <tr><td>Staff hours saved</td><td>—</td><td><svg class="icon" aria-label="measured"><use href="#i-check"/></svg></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FAQ ================= -->
+<section class="section" id="faq">
+  <div class="container faq-wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">FAQ</span>
+      <h2>Questions city leaders ask us.</h2>
+      <p class="lede">Don't see yours? <a href="#contact" style="color:var(--blue);font-weight:600">Ask us directly</a>.</p>
+    </div>
+    <div class="faq reveal">
+      <details>
+        <summary>Does CityHallOS replace our staff?<span class="pm"><svg class="icon"><use href="#i-plus"/></svg></span></summary>
+        <p>No. It takes repetitive work off their plate — the same questions, missing paperwork, re-typing and follow-ups — so your team can spend time on the work that needs a person. Employees stay in charge of decisions.</p>
+      </details>
+      <details>
+        <summary>Do we have to replace our current software?<span class="pm"><svg class="icon"><use href="#i-plus"/></svg></span></summary>
+        <p>No. CityHallOS sits on top of the systems you already use. We don't replace accounting, payroll, utility billing or tax collection — over time we integrate with them.</p>
+      </details>
+      <details>
+        <summary>What happens when the AI doesn't know the answer?<span class="pm"><svg class="icon"><use href="#i-plus"/></svg></span></summary>
+        <p>It says so. CityHallOS only answers from documents your city has approved, cites its source, and hands anything uncertain to a staff member with a summary, so nobody has to start over.</p>
+      </details>
+      <details>
+        <summary>Can the AI approve permits or make legal decisions?<span class="pm"><svg class="icon"><use href="#i-plus"/></svg></span></summary>
+        <p>Never. The AI can explain requirements, check applications for completeness and prepare checklists, but statutory decisions always stay with your authorized officials.</p>
+      </details>
+      <details>
+        <summary>What about emergencies?<span class="pm"><svg class="icon"><use href="#i-plus"/></svg></span></summary>
+        <p>Emergency and safety-critical messages immediately direct residents to 911 and the right emergency services. They never sit in an ordinary queue.</p>
+      </details>
+      <details>
+        <summary>How is our data protected?<span class="pm"><svg class="icon"><use href="#i-plus"/></svg></span></summary>
+        <p>Each city's data is isolated from every other city's. Data is encrypted in transit and at rest, access is role-based, and every action is recorded in an audit log you can export for public records purposes.</p>
+      </details>
+      <details>
+        <summary>How long does it take to get started?<span class="pm"><svg class="icon"><use href="#i-plus"/></svg></span></summary>
+        <p>Weeks, not months. A typical pilot spends the first couple of weeks measuring your baseline and loading your documents, then goes live on your website.</p>
+      </details>
+      <details>
+        <summary>Who is CityHallOS built for?<span class="pm"><svg class="icon"><use href="#i-plus"/></svg></span></summary>
+        <p>Cities and towns of roughly 2,000 to 25,000 residents with small administrative teams, meaningful resident service volume and limited in-house technical resources. We're starting in Mississippi and expanding regionally.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CTA / CONTACT ================= -->
+<section class="cta" id="contact">
+  <div class="container">
+    <div class="cta-card">
+      <div>
+        <span class="eyebrow">Get started</span>
+        <h2>Give your town the administrative power of a much larger city.</h2>
+        <p class="lede">Book a 30-minute walkthrough. We'll show CityHallOS with your city's real questions and talk through a pilot.</p>
+        <ul class="cta-list">
+          <li><svg class="icon"><use href="#i-check"/></svg>A live demo tailored to your city</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>An honest look at what AI can and can't do for you</li>
+          <li><svg class="icon"><use href="#i-check"/></svg>A pilot plan with measurable goals</li>
+        </ul>
+      </div>
+      <form class="contact" id="contactForm" novalidate>
+        <div class="field"><label for="cName">Full name</label><input id="cName" name="name" required autocomplete="name"></div>
+        <div class="field"><label for="cRole">Title</label><input id="cRole" name="title" placeholder="City Clerk, Mayor…" autocomplete="organization-title"></div>
+        <div class="field"><label for="cCity">City or town</label><input id="cCity" name="city" required></div>
+        <div class="field"><label for="cState">State</label><input id="cState" name="state" value="Mississippi" autocomplete="address-level1"></div>
+        <div class="field full"><label for="cEmail">Work email</label><input id="cEmail" name="email" type="email" required autocomplete="email"></div>
+        <div class="field full">
+          <label for="cPop">Population</label>
+          <select id="cPop" name="population">
+            <option>Under 2,000</option>
+            <option selected>2,000 – 10,000</option>
+            <option>10,000 – 25,000</option>
+            <option>25,000 – 100,000</option>
+            <option>Over 100,000</option>
+          </select>
+        </div>
+        <div class="field full"><label for="cMsg">What takes up the most time at your City Hall?</label><textarea id="cMsg" name="message" placeholder="Phone calls about trash pickup, permit questions, records requests…"></textarea></div>
+        <input type="hidden" name="plan" id="cPlan">
+        <div class="full"><button class="btn btn-primary" type="submit">Book a walkthrough <svg class="icon"><use href="#i-arrow"/></svg></button></div>
+        <p class="fine full">We'll only use your information to contact you about CityHallOS.</p>
+        <div class="contact-success" role="status">
+          <div class="ok"><svg class="icon icon-lg"><use href="#i-check"/></svg></div>
+          <h3>Thanks — we'll be in touch.</h3>
+          <p>Expect a note from our team within one business day to schedule your walkthrough.</p>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ================= FOOTER ================= -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div>
+        <a href="#top" class="brand"><img class="brand-mark" src="favicon.svg" alt="" width="32" height="32"><span class="brand-name">CityHall<span>OS</span></span></a>
+        <p>A smarter way to run City Hall. AI-powered operations for small and mid-sized local governments.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <ul>
+          <li><a href="#platform">Platform</a></li>
+          <li><a href="#agents">AI agents</a></li>
+          <li><a href="#demo">Live demo</a></li>
+          <li><a href="#roadmap">Roadmap</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>For cities</h4>
+        <ul>
+          <li><a href="#pilot">Pilot program</a></li>
+          <li><a href="#pricing">Pricing</a></li>
+          <li><a href="#trust">Trust &amp; security</a></li>
+          <li><a href="#faq">FAQ</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Company</h4>
+        <ul>
+          <li><a href="#contact">Contact</a></li>
+          <li><a href="#contact">Book a walkthrough</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span id="year">2026</span> CityHallOS. All rights reserved.</span>
+      <span>Proudly building for Mississippi communities.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
+</body>
+</html>
