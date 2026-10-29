@@ -21,11 +21,16 @@ Then open http://localhost:5173.
 
 ## Deploy
 
-Hosted on Cloudflare Pages (project `cityhallos`), served at https://cityhallos.com.
+Hosted on Cloudflare Workers static assets (Worker `cityhallos`), served at https://cityhallos.com and
+https://www.cityhallos.com. Config lives in [`wrangler.jsonc`](wrangler.jsonc); Cloudflare manages the
+DNS records and certificates for both custom domains.
 
 ```bash
-npx wrangler pages deploy public --project-name cityhallos --branch main
+npx wrangler deploy
 ```
+
+The social share image is `public/og-image.png` (1200×630). Favicons: `favicon.ico`, `favicon.svg`,
+`favicon-32.png`, `apple-touch-icon.png`, plus `icon-192.png` / `icon-512.png` for the web manifest.
 
 ## The live demo
 
