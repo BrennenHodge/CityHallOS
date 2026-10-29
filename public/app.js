@@ -1,4 +1,4 @@
-/* CityHallOS marketing site — interactions */
+/* City Hall OS marketing site — interactions */
 (() => {
   'use strict';
 
@@ -130,7 +130,7 @@
     },
     resident: {
       title: 'Get help without knowing who to call.',
-      body: 'Residents describe what they need in their own words. CityHallOS figures out the department, the form and the next step.',
+      body: 'Residents describe what they need in their own words. City Hall OS figures out the department, the form and the next step.',
       points: [
         ['clock', 'Open 24/7', 'Answers and reports any time, from phone or computer.'],
         ['book', 'Trustworthy answers', 'Every answer points to the official town source.'],

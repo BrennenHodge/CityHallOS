@@ -1,6 +1,6 @@
 # CityHallOS.com
 
-Marketing site for **CityHallOS**, the AI operating system for local government.
+Marketing site for **City Hall OS**, the AI operating system for local government.
 
 A static site with no build step. Everything served lives in [`public/`](public):
 

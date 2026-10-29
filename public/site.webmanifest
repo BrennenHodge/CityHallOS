@@ -1,6 +1,6 @@
 {
-  "name": "CityHallOS",
-  "short_name": "CityHallOS",
+  "name": "City Hall OS",
+  "short_name": "City Hall OS",
   "description": "The AI operating system for City Hall.",
   "start_url": "/",
   "display": "browser",
