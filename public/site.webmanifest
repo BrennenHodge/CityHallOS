@@ -1,0 +1,13 @@
+{
+  "name": "CityHallOS",
+  "short_name": "CityHallOS",
+  "description": "The AI operating system for City Hall.",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#fbfaf6",
+  "theme_color": "#2450e0",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
