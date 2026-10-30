@@ -972,6 +972,7 @@
 
   async function renderChannels(page) {
     const snippet = `<script src="${EMBED_SRC}" data-city="${CITY}" async></script>`;
+    const phone = await api('/channels');
     page.innerHTML = `
       <div class="stack" style="max-width:980px">
         <div class="card card-b"><div class="channel">
@@ -986,14 +987,16 @@
           <span></span></div></div>
         <div class="card card-b"><div class="channel">
           <div class="channel-icon" style="background:var(--violet-soft);color:var(--violet)">${icon('phone')}</div>
-          <div><h3>Voice agent <span class="pill amber" style="margin-left:6px">Ready to connect</span></h3>
-            <p>The phone agent uses this same knowledge base and the same rules: it answers from city documents, files requests and transfers to staff. Connect a City Hall phone number to turn it on.</p>
-            <div class="code" style="margin-top:12px">POST ${location.origin}/api/${CITY}/chat
-{ "message": "What time does City Hall close?", "channel": "voice" }</div></div><span></span></div></div>
+          <div><h3>Phone and text messages ${phone.phone ? '<span class="pill green" style="margin-left:6px">Twilio connected</span>' : '<span class="pill amber" style="margin-left:6px">Needs a Twilio number</span>'}</h3>
+            <p>Residents call or text a City Hall number. The AI answers from this knowledge base, takes problem reports with a tracking number, checks on requests by number, and hands callers to City Hall during office hours. Every call and text appears under Conversations.</p>
+            <ol class="muted" style="margin:10px 0 0;padding-left:20px;font-size:13.5px">
+              <li>Buy a local number in Twilio (Phone Numbers → Buy a number).</li>
+              <li>On the number, set <b>A message comes in</b> to the first address below and <b>A call comes in</b> to the second, both as HTTP POST.</li>
+              <li>City Hall OS support adds the Twilio account keys to the platform once; every city's number then works.</li>
+            </ol>
+            <div class="code" style="margin-top:12px">Messages: ${esc(phone.smsUrl)}
+Calls:    ${esc(phone.voiceUrl)}</div></div><span></span></div></div>
         <div class="cols cols-2">
-          <div class="card card-b"><div class="channel" style="grid-template-columns:48px 1fr">
-            <div class="channel-icon" style="background:var(--green-soft);color:var(--green)">${icon('sms')}</div>
-            <div><h3>Text messages <span class="pill amber" style="margin-left:6px">Ready to connect</span></h3><p>Residents text questions and report issues by SMS. Same knowledge base, same conversation log. Send messages to the chat API with <code>"channel": "sms"</code>.</p></div></div></div>
           <div class="card card-b"><div class="channel" style="grid-template-columns:48px 1fr">
             <div class="channel-icon" style="background:var(--amber-soft);color:var(--amber)">${icon('mail')}</div>
             <div><h3>Email inbox</h3><p>Draft replies to the City Clerk's inbox from city documents, for staff to approve and send.</p><span class="pill" style="margin-top:8px">Coming next</span></div></div></div>

@@ -475,6 +475,23 @@ export class CityStore extends DurableObject {
     });
   }
 
+  // The ongoing text or call conversation with a phone number, if it's recent enough to continue.
+  findConversation(channel, contact, since) {
+    return this.one('SELECT id, flow FROM conversations WHERE channel = ? AND contact = ? AND last_at >= ? ORDER BY last_at DESC LIMIT 1', channel, contact, since);
+  }
+
+  // A conversation's step-by-step intake state (text and phone reports), or null when there is none.
+  setFlow(convoId, flow) { this.run('UPDATE conversations SET flow = ? WHERE id = ?', flow ? JSON.stringify(flow) : null, convoId); }
+
+  // A reply the platform wrote itself (intake prompts, confirmations), saved like any answer.
+  addReply(convoId, content, flag = 'action') {
+    const t = now();
+    this.run("INSERT INTO messages (convo_id, role, content, flag, model, created_at) VALUES (?, 'assistant', ?, ?, 'workflow', ?)", convoId, content, flag, t);
+    this.run('UPDATE conversations SET messages = messages + 2, last_at = ? WHERE id = ?', t, convoId);
+  }
+
+  flagConversation(convoId, status) { this.run('UPDATE conversations SET status = ? WHERE id = ?', status, convoId); }
+
   listConversations({ status } = {}) {
     const args = [];
     let where = "channel != 'staff-test'";

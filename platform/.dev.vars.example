@@ -6,3 +6,5 @@ DEV_ADMIN_EMAIL=admin@cityhallos.test
 DEV_ADMIN_PASSWORD=local-dev-password
 # Optional: answer with Claude instead of Workers AI.
 # ANTHROPIC_API_KEY=
+# Lets you try the text and phone webhooks locally without Twilio's signature. Never set this in production.
+TWILIO_ALLOW_UNSIGNED=1

@@ -52,8 +52,16 @@ const authorityNote = (s, a) => ({
   'curated-research': 'researched summary prepared for City Hall OS',
 }[a] || a);
 
-export function systemPrompt(s) {
-  return `You are ${s.assistantName}, the AI City Clerk for the ${s.cityName}, ${s.state} (${s.county}). You are the city's virtual front desk on its website.${s.disambiguation ? ' ' + s.disambiguation : ''}
+// How replies should read on each channel. Citations stay in every channel so the platform knows which sources
+// were used; text messages and calls remove them before the resident sees or hears the reply.
+const CHANNEL_STYLE = {
+  web: "You are the city's virtual front desk on its website.",
+  sms: "You are answering a resident by text message. Keep it to two or three short sentences, plain text with no markdown, bullets or bold. Don't write web addresses; the platform adds a link when it helps.",
+  voice: "You are answering a resident on a phone call. Speak in two or three short, natural sentences that sound right read aloud: no lists, no markdown, no web addresses. Write phone numbers normally, like 601-928-7221; the platform reads them aloud digit by digit.",
+};
+
+export function systemPrompt(s, channel = 'web') {
+  return `You are ${s.assistantName}, the AI City Clerk for the ${s.cityName}, ${s.state} (${s.county}). ${CHANNEL_STYLE[channel] || CHANNEL_STYLE.web}${s.disambiguation ? ' ' + s.disambiguation : ''}
 
 How to answer:
 - Answer ONLY from the numbered sources in the user's message. Cite each fact with one source number in square brackets right after it, like [2] or [2][4]. Never write ranges like [2-5] or lists like [1, 2], and only cite a source that actually says the fact. Never invent phone numbers, names, fees, dates, hours or rules.

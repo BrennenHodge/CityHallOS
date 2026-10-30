@@ -5,7 +5,9 @@
 //   env.CITY_STORE  one database per city: knowledge base, conversations, requests, audit log
 import { chunkText, extractText, guessMime } from './ingest.js';
 import { search } from './search.js';
-import { buildUserMessage, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
+import { modelName } from './assistant.js';
+import { recordReply, respond, summarize } from './reply.js';
+import { phoneConfigured, phoneRoute } from './phone.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
@@ -27,18 +29,6 @@ const fail = (status, error) => json({ error }, status);
 const uid = (p) => p + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 const now = () => new Date().toISOString();
 const httpError = (status, message) => Object.assign(new Error(message), { status });
-
-// Source numbers cited in an answer: [2], [2][3], and the occasional [2, 3] or [2-4].
-function citedNumbers(text) {
-  const out = new Set();
-  for (const [, inner] of text.matchAll(/\[(\d+(?:\s*[,–-]\s*\d+)*)\]/g)) {
-    for (const part of inner.split(',')) {
-      const [a, b] = part.split(/[–-]/).map((x) => Number(x.trim()));
-      for (let n = a; n <= (b || a) && n - a < 20; n++) out.add(n);
-    }
-  }
-  return out;
-}
 
 /* ---------------- Cities ---------------- */
 
@@ -139,6 +129,7 @@ async function route(request, env, ctx, url) {
     if (res === 'track' && m === 'GET' && id) return trackRequest(store, id);
     if (res === 'forms' && m === 'GET') return listForms(city, store);
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
+    if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c) });
   }
 
   // Staff only. Each route names the permission it needs.
@@ -176,6 +167,11 @@ async function route(request, env, ctx, url) {
   if (res === 'freshness' && m === 'GET') { need('knowledge.view'); return json(await store.freshness()); }
   if (res === 'freshness' && m === 'POST') { need('knowledge.edit'); return json(await store.checkSources(10)); }
   if (res === 'report' && m === 'GET') { need('report.view'); return report(env, city, store, url); }
+  if (res === 'channels' && m === 'GET') {
+    need('channels.view');
+    const base = `${url.origin}/api/${city.slug}/twilio`;
+    return json({ phone: phoneConfigured(env), smsUrl: `${base}/sms`, voiceUrl: `${base}/voice` });
+  }
   if (res === 'staff') {
     if (!id && m === 'GET') { need('requests.view'); return listStaff(env, city, store, me); }
     if (!id && m === 'POST') { need('staff.manage'); return addStaff(request, env, city, store, me, url); }
@@ -374,86 +370,16 @@ async function chat(request, env, ctx, city, store, me) {
     contact: channel === 'web' ? null : String(body.from || '').slice(0, 40) || null, question,
   });
 
-  const s = city.settings;
   const enc = new TextEncoder();
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const send = (event, data) => writer.write(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
 
   const run = async () => {
-    let answer = '';
-    let sources = [];
-    let flags = { needsStaff: false, offerReport: false, emergency: false };
-    let reportType = null;
-    try {
-      const emergency = isEmergency(question);
-      const type = emergency ? null : (await store.requestTypes()).find((t) => t.key === detectReport(question));
-      if (type) {
-        reportType = type.key;
-        flags.offerReport = true;
-        answer = `Thanks for letting us know. I can send this straight to **${type.department}** as a "${type.label.toLowerCase()}" request. ` +
-          `Tap **Report this issue** below to add the location and any details, and you'll get a tracking number.`;
-        await send('meta', { convoId, sources: [] });
-        await send('delta', { t: answer });
-      } else if (emergency) {
-        flags.emergency = true;
-        answer = `**If this is an emergency, call 911 now.** I'm an automated assistant and can't dispatch help.\n\n` +
-          (s.policeNonEmergency ? `For a non-emergency police matter, call ${s.shortName} Police at ${s.policeNonEmergency}. ` : '') +
-          (s.phone ? `For anything else, City Hall is at ${s.phone}.` : '');
-        await send('meta', { convoId, sources: [] });
-        await send('delta', { t: answer });
-      } else {
-        // Short follow-ups ("what about fences?") search better with the previous question attached.
-        const lastUser = [...history].reverse().find((h) => h.role === 'user');
-        const q = question.split(/\s+/).length < 6 && lastUser ? `${lastUser.content} ${question}` : question;
-        const hits = await search(env, store, s, q, { includeInternal: staff, limit: 6 });
-        sources = [
-          { n: 1, title: 'City Hall contact information', category: 'City profile', url: s.website || null, as_of: 'current', authority: 'staff-note' },
-          ...hits.map((h, i) => ({
-            n: i + 2, docId: h.doc.id, title: h.doc.title, heading: h.heading, category: h.doc.category,
-            url: h.doc.source_url || (h.doc.file_key ? `/api/${city.slug}/documents/${h.doc.id}/file` : null),
-            as_of: h.doc.as_of, authority: h.doc.authority, verification: h.doc.verification, visibility: h.doc.visibility,
-            ...(staff ? { score: Math.round(h.score * 1000) / 1000, excerpt: h.text.slice(0, 400) } : {}),
-          })),
-        ];
-        await send('meta', { convoId, sources });
-        const messages = [
-          ...history.map((h) => ({ role: h.role, content: h.content })),
-          { role: 'user', content: buildUserMessage(s, question, hits) },
-        ];
-        const filter = tokenFilter();
-        for await (const piece of generate(env, systemPrompt(s), messages)) {
-          const out = filter.push(piece);
-          if (out) { answer += out; await send('delta', { t: out }); }
-        }
-        const tail = filter.end();
-        if (tail) { answer += tail; await send('delta', { t: tail }); }
-        flags = { ...flags, ...filter.flags };
-        // A well-sourced answer doesn't need a staff follow-up even if the model asked for one.
-        if ([...citedNumbers(answer)].filter((n) => n > 1).length >= 2) flags.needsStaff = false;
-        if (!citedNumbers(answer).size && !flags.offerReport) flags.needsStaff = true;
-      }
-    } catch (e) {
-      console.log('chat error', e.stack || e.message);
-      flags.needsStaff = true;
-      const msg = `Sorry, I had trouble answering just now. Please try again${s.phone ? `, or call City Hall at ${s.phone}` : ''}.`;
-      answer += (answer ? '\n\n' : '') + msg;
-      await send('delta', { t: msg }).catch(() => {});
-    }
-
-    const cited = citedNumbers(answer);
-    const used = sources.filter((x) => cited.has(x.n));
-    await send('done', { convoId, flags, cited: [...cited], reportType }).catch(() => {});
+    const r = await respond(env, city, store, { convoId, question, history, includeInternal: staff, channel, send });
+    await send('done', { convoId, flags: r.flags, cited: [...r.cited], reportType: r.reportType }).catch(() => {});
     await writer.close().catch(() => {});
-
-    await store.finishTurn({
-      convoId, answer,
-      sources: (used.length ? used : sources.slice(0, 3)).map(({ score, excerpt, ...x }) => x),
-      flag: flags.emergency ? 'emergency' : flags.needsStaff ? 'needs_staff' : flags.offerReport ? 'report' : null,
-      model: flags.emergency || reportType ? 'rule' : modelName(env),
-      status: flags.emergency ? 'emergency' : flags.needsStaff ? 'needs_review' : null,
-      citedDocIds: used.filter((u) => u.docId).map((u) => u.docId),
-    });
+    await recordReply(env, store, convoId, r);
   };
   ctx.waitUntil(run());
   return new Response(readable, {
@@ -633,10 +559,6 @@ async function updateConversation(request, store, id, me) {
 
 const REQUEST_STATUSES = ['new', 'needs_info', 'assigned', 'in_progress', 'awaiting_review', 'resolved', 'closed'];
 
-function summarize(label, location, description) {
-  const text = description.split(/\n+/).map((p) => p.trim().replace(/[.!?]?$/, '.')).join(' ');
-  return `${label}${location ? ` at ${location}` : ''}. ${text.length > 200 ? text.slice(0, 197) + '…' : text}`;
-}
 
 // Resident contact details are only shown to roles that work requests.
 const redact = (r, me) => (me.can('residents.contact') ? r : { ...r, name: r.name ? 'Hidden' : null, contact: r.contact ? 'Hidden' : null });
