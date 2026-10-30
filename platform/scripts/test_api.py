@@ -51,7 +51,7 @@ try:
     ok(s == 200 and me['operator'], 'operator signs in with the access code')
 
     def onboard(name, role, dept=None):
-        email = f'{role}-{RUN}@example.test'
+        email = f"{role}-{name.split()[0].lower()}-{RUN}@example.test"
         s, r = operator.call('POST', f'/{A}/staff', {'name': name, 'email': email, 'role': role, 'department_id': dept, 'title': 'Tester'})
         assert s == 201, (s, r)
         token = r['setupUrl'].split('/setup/')[1]
@@ -166,12 +166,91 @@ try:
     ok(done['reportType'] == 'pothole' and 'Public Works' in text, 'reported problems open the report form')
     text, done = chat(A, 'What are the rules for raising goats inside city limits?')
     ok(done['flags']['needsStaff'], 'questions with no documents are flagged for staff')
+    text, done = chat(A, 'I want to build a detached garage behind my house')
+    ok(done['flags'].get('offerPermit'), 'describing building work offers the permit application')
+
+    # Permit applications: the resident's side, with only the secret link.
+    def upload(path, token, kind, name='deed.pdf'):
+        boundary = 'chos' + secrets.token_hex(8)
+        pdf = b'%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n'
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="kind"\r\n\r\n{kind}\r\n'
+                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: application/pdf\r\n\r\n').encode() + pdf + f'\r\n--{boundary}--\r\n'.encode()
+        req = urllib.request.Request(f'{ORIGIN}/api{path}', data=body, method='POST', headers={
+            'Content-Type': f'multipart/form-data; boundary={boundary}', 'X-Permit-Token': token, 'User-Agent': 'CityHallOS-scripts/1.0'})
+        with urllib.request.urlopen(req, timeout=60) as res:
+            return res.status, json.loads(res.read())
+
+    s, app = anon.call('POST', f'/{A}/permits', {'opening': 'I want to build a 24 by 30 foot detached garage behind my house'})
+    ok(s == 201 and app['token'] and app['status'] == 'draft', 'a resident starts a permit application without an account')
+    ok(app['data'].get('construction_type') == 'new' and app['data'].get('width') == 24 and app['data'].get('occupancy') == 'garage',
+       'the opening message fills in the type, size and use')
+    pid, tok = app['id'], {'X-Permit-Token': app['token']}
+    s, _ = anon.call('GET', f'/{A}/permits/{pid}', headers={'X-Permit-Token': 'not-the-token'})
+    ok(s == 404, 'an application cannot be opened without its secret link')
+    s, _ = anon.call('GET', f'/{B}/permits/{pid}', headers=tok)
+    ok(s == 404, "one city's application link doesn't open in another city")
+    s, r = anon.call('POST', f'/{A}/permits/{pid}/message', {'text': 'Yes', 'ask': 'work_started'}, tok)
+    ok(s == 200 and r['data'].get('work_started') is True, 'a chat answer is saved to the right field')
+    s, r = anon.call('PATCH', f'/{A}/permits/{pid}', {'data': {'owner_email': 'not-an-email', 'valuation': '$18,500'}}, tok)
+    ok(s == 200 and r['data']['valuation'] == 18500 and any(c['field'] == 'owner_email' and c['level'] == 'error' for c in r['checks']),
+       'form edits autosave, amounts are cleaned and bad emails are flagged')
+    s, r = anon.call('POST', f'/{A}/permits/{pid}/submit', {}, tok)
+    ok(s == 400 and any(c['level'] == 'error' for c in r.get('checks', [])), "an incomplete application can't be submitted")
+    s, r = anon.call('PATCH', f'/{A}/permits/{pid}', {'data': {
+        'job_address': '412 Pine St', 'applicant_role': 'owner', 'owner_name': 'Jane Resident', 'owner_same_mailing': False,
+        'owner_address': '9 Oak Ave', 'owner_city': 'Testville', 'owner_state': 'ms', 'owner_zip': '39577', 'owner_cell': '601-555-0142',
+        'owner_email': 'jane@example.test', 'contact_pref': 'email', 'builder': 'owner', 'owner_exemption': 'remodel_under_10k', 'owner_ack': True,
+        'stories': 1, 'length': 30, 'height': 14, 'zoning': 'R-1', 'design_pro': 'none', 'hazmat_ack': True, 'certify': True, 'signature_name': 'Jane Resident'}}, tok)
+    ok(r['data']['owner_state'] == 'MS' and r['data'].get('signed_at') and r['data']['area_under_roof'] == 720, 'state is normalized, signing is dated and the area is worked out')
+    ok(any(c['field'] == 'owner_exemption' and c['level'] == 'error' for c in r['checks']), "an owner-builder exception that doesn't fit the project is caught")
+    anon.call('PATCH', f'/{A}/permits/{pid}', {'data': {'owner_exemption': 'principal_residence'}}, tok)
+    s, r = upload(f'/{A}/permits/{pid}/files', app['token'], 'ownership_proof')
+    ok(s == 200 and r['files'][0]['kind'] == 'ownership_proof', 'proof of ownership uploads to the application')
+    s, r = anon.call('POST', f'/{A}/permits/{pid}/submit', {}, tok)
+    ok(s == 200 and r['status'] == 'submitted' and r['ref'] == 'TST-BP-1001', f"a submitted application gets its number ({r.get('ref') or r.get('error')})")
+    s, r = anon.call('PATCH', f'/{A}/permits/{pid}', {'data': {'valuation': 1}}, tok)
+    ok(s == 400, "a submitted application can't be changed online")
+    s, t = anon.call('GET', f'/{A}/track/tst-bp-1001')
+    ok(s == 200 and t['status'] == 'submitted' and 'data' not in t and 'contact' not in t, 'permit tracking shows status without personal details')
+
+    # Permit applications: City Hall's side.
+    planner, _, _, _ = onboard('Pia Planning', 'department', 'planning-building')
+    s, r = planner.call('GET', f'/{A}/permits')
+    ok(s == 200 and [x['ref'] for x in r['permits']] == ['TST-BP-1001'], 'permit staff see submitted applications, not drafts')
+    s, r = editor.call('GET', f'/{A}/permits/{pid}')
+    ok(s == 200 and r['data']['owner_email'] == 'Hidden' and not r['canEdit'], "roles without resident contact access see the application with contact details hidden")
+    s, _ = works.call('POST', f'/{A}/permits/{pid}/actions', {'action': 'accept', 'fee': 50})
+    ok(s == 403, "another department's staff can't decide permits")
+    s, _ = planner.call('POST', f'/{A}/permits/{pid}/actions', {'action': 'issue', 'permit_number': 'X-1'})
+    ok(s == 400, "a permit can't be issued before the application is complete and paid")
+    s, r = planner.call('POST', f'/{A}/permits/{pid}/actions', {'action': 'request_info', 'items': ['Add the side and rear setbacks']})
+    ok(s == 200 and r['status'] == 'needs_info', 'staff send an application back with a list of changes')
+    s, r = anon.call('GET', f'/{A}/permits/{pid}', headers=tok)
+    ok(r['editable'] and r['corrections']['items'] == ['Add the side and rear setbacks'], 'the applicant sees exactly what to change')
+    anon.call('PATCH', f'/{A}/permits/{pid}', {'data': {'setback_front': 40, 'setback_side': 10, 'setback_rear': 15, 'applicant_note': 'Setbacks added'}}, tok)
+    s, r = anon.call('POST', f'/{A}/permits/{pid}/submit', {}, tok)
+    ok(s == 200 and r['ref'] == 'TST-BP-1001', 'a resubmitted application keeps its number')
+    s, r = planner.call('POST', f'/{A}/permits/{pid}/actions', {'action': 'accept', 'fee': 120.5})
+    ok(r['status'] == 'fees_due' and r['fee_assessed'] == 120.5, 'staff mark the application complete and set the fee')
+    s, r = planner.call('POST', f'/{A}/permits/{pid}/actions', {'action': 'payment', 'amount': 120.5, 'receipt': 'R-77'})
+    ok(r['status'] == 'in_review', 'recording the payment starts the review')
+    s, r = planner.call('POST', f'/{A}/permits/{pid}/actions', {'action': 'issue', 'permit_number': f'TST-{RUN}-1001', 'conditions': 'Call for footing inspection'})
+    ok(r['status'] == 'issued' and r['permit_number'] == f'TST-{RUN}-1001', 'staff issue the permit')
+    for path, label in [(f'/{A}/permits/{pid}/pdf', 'application'), (f'/{A}/permits/{pid}/permit.pdf', 'permit')]:
+        req = urllib.request.Request(f'{ORIGIN}/api{path}', headers={'X-Permit-Token': app['token'], 'User-Agent': 'CityHallOS-scripts/1.0'})
+        with urllib.request.urlopen(req, timeout=60) as res:
+            ok(res.headers['Content-Type'] == 'application/pdf' and res.read(5) == b'%PDF-', f'the applicant downloads the {label} PDF')
+    s, r = planner.call('GET', f'/{A}/permits/{pid}')
+    subjects = ' | '.join(o['subject'] for o in r['outbox'])
+    ok(all(x in subjects for x in ['needs a few changes', 'fee due', 'has been issued']) and all(o['channel'] == 'email' for o in r['outbox']),
+       'the applicant is told at each step on their chosen channel, and every message is logged')
 
     # Audit log.
     s, r = admin.call('GET', f'/{A}/audit')
     acts = {e['action'] for e in r['events']}
     for a in ['city.create', 'request.create', 'request.update', 'document.create', 'document.update', 'document.delete',
-              'staff.create', 'access.role', 'access.revoke', 'access.setup_link', 'settings.update']:
+              'staff.create', 'access.role', 'access.revoke', 'access.setup_link', 'settings.update',
+              'permit.submit', 'permit.needs_info', 'permit.resubmit', 'permit.fees_due', 'permit.in_review', 'permit.issued']:
         ok(a in acts, f'audit log records {a}')
     e = next(e for e in r['events'] if e['action'] == 'document.update')
     ok(e['actor_name'] == 'Eddie Editor' and e['changes']['verification'] == ['verified_current', 'historical'], 'audit entries name the person and the before and after values')

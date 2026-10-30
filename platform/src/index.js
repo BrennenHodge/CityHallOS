@@ -5,11 +5,12 @@
 //   env.CITY_STORE  one database per city: knowledge base, conversations, requests, audit log
 import { chunkText, extractText, guessMime } from './ingest.js';
 import { search } from './search.js';
-import { buildUserMessage, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
+import { buildUserMessage, detectPermit, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
+import { permitRoute, sendPermitReminders } from './permits/routes.js';
 
 export { CityStore } from './store.js';
 export { AuthService } from './auth.js';
@@ -17,7 +18,7 @@ export { AuthService } from './auth.js';
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Permit-Token',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -107,6 +108,20 @@ export default {
       return fail(e.status || 500, e.status || local ? e.message : 'Something went wrong. Please try again.');
     }
   },
+
+  // Daily: remind applicants about unfinished permit applications and requested corrections.
+  async scheduled(event, env, ctx) {
+    const { results } = await env.DB.prepare("SELECT * FROM cities WHERE status = 'active'").all();
+    for (const row of results) {
+      const city = toCity(row);
+      try {
+        const n = await sendPermitReminders(env, city, storeFor(env, city));
+        if (n) console.log(`${city.slug}: sent ${n} permit reminders`);
+      } catch (e) {
+        console.log(`${city.slug}: reminders failed`, e.stack || e.message);
+      }
+    }
+  },
 };
 
 async function route(request, env, ctx, url) {
@@ -139,6 +154,7 @@ async function route(request, env, ctx, url) {
     if (res === 'track' && m === 'GET' && id) return trackRequest(store, id);
     if (res === 'forms' && m === 'GET') return listForms(city, store);
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
+    if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   }
 
   // Staff only. Each route names the permission it needs.
@@ -165,6 +181,7 @@ async function route(request, env, ctx, url) {
     if (id && sub === 'photo' && m === 'GET') { need('requests.view'); return requestPhoto(env, store, id, me); }
     if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, store, id, me); }
   }
+  if (res === 'permits') return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
   if (res === 'staff') {
     if (!id && m === 'GET') { need('requests.view'); return listStaff(env, city, store, me); }
@@ -193,6 +210,7 @@ async function publicConfig(city, store) {
     city: city.slug, cityName: s.cityName, assistantName: s.assistantName, tagline: s.tagline, greeting: s.greeting,
     brandColor: s.brandColor, suggestions: s.suggestions, phone: s.phone, policeNonEmergency: s.policeNonEmergency,
     requestTypes: (await store.requestTypes()).map(({ key, label }) => ({ key, label })),
+    permits: s.permits?.construction?.enabled !== false,
   }, 200, { 'Cache-Control': 'public, max-age=60' });
 }
 
@@ -371,7 +389,7 @@ async function chat(request, env, ctx, city, store, me) {
   const run = async () => {
     let answer = '';
     let sources = [];
-    let flags = { needsStaff: false, offerReport: false, emergency: false };
+    let flags = { needsStaff: false, offerReport: false, emergency: false, offerPermit: false };
     let reportType = null;
     try {
       const emergency = isEmergency(question);
@@ -429,6 +447,7 @@ async function chat(request, env, ctx, city, store, me) {
       await send('delta', { t: msg }).catch(() => {});
     }
 
+    flags.offerPermit = !flags.emergency && !reportType && s.permits?.construction?.enabled !== false && detectPermit(question);
     const cited = citedNumbers(answer);
     const used = sources.filter((x) => cited.has(x.n));
     await send('done', { convoId, flags, cited: [...cited], reportType }).catch(() => {});
@@ -647,7 +666,12 @@ async function createRequest(request, env, city, store, me) {
 }
 
 async function trackRequest(store, ref) {
-  const r = await store.trackRequest(String(ref).toUpperCase().trim());
+  ref = String(ref).toUpperCase().trim();
+  if (/-BP-\d+$/.test(ref)) {
+    const p = await store.trackPermit(ref);
+    return p ? json(p) : fail(404, 'No permit application with that number');
+  }
+  const r = await store.trackRequest(ref);
   return r ? json(r) : fail(404, 'No request with that number');
 }
 
@@ -810,10 +834,38 @@ async function saveSettings(request, env, city, store, me) {
     if (JSON.stringify(city.settings[k] ?? '') !== JSON.stringify(v)) changes[k] = [city.settings[k] ?? null, v];
     stored[k] = v;
   }
+  if (b.permits && typeof b.permits === 'object') {
+    const next = permitSettings(b.permits, stored.permits || {});
+    if (JSON.stringify(next) !== JSON.stringify(stored.permits || {})) changes.permits = [stored.permits || null, next];
+    stored.permits = next;
+  }
   await env.DB.prepare('UPDATE cities SET settings = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(stored), now(), city.id).run();
   cityCache.delete(city.slug);
   if (Object.keys(changes).length) {
     await store.record(me.actor, 'settings.update', 'settings', null, `Changed ${Object.keys(changes).join(', ')} in Settings`, changes);
   }
   return json((await getCity(env, city.slug)).settings);
+}
+
+// Permit options staff can change. Fee tiers follow the shape permitFee() in permits/construction.js reads.
+function permitSettings(input, current) {
+  const c = { ...(current.construction || {}) };
+  const b = input.construction || {};
+  if ('enabled' in b) c.enabled = !!b.enabled;
+  if ('autoReturn' in b) c.autoReturn = !!b.autoReturn;
+  if ('paymentInstructions' in b) c.paymentInstructions = clean(b.paymentInstructions, 600) ?? '';
+  if ('department' in b) c.department = clean(b.department, 60) ?? 'planning-building';
+  if ('formUrl' in b) c.formUrl = clean(b.formUrl, 500);
+  if ('pdfTemplate' in b) c.pdfTemplate = clean(b.pdfTemplate, 60);
+  if (b.fees && typeof b.fees === 'object') {
+    const tiers = (Array.isArray(b.fees.tiers) ? b.fees.tiers : []).slice(0, 20).map((t) => ({
+      upTo: t.upTo == null ? null : Number(t.upTo),
+      ...(t.fee != null ? { fee: Number(t.fee) } : { base: Number(t.base), over: Number(t.over), per: Number(t.per) || 1000, add: Number(t.add) }),
+    })).filter((t) => Object.values(t).every((v) => v === null || Number.isFinite(v)));
+    c.fees = {
+      tiers, doubleIfStarted: !!b.fees.doubleIfStarted, planReviewShare: Number(b.fees.planReviewShare) || 0,
+      notes: (Array.isArray(b.fees.notes) ? b.fees.notes : []).map((x) => clean(x, 300)).filter(Boolean).slice(0, 10), source: clean(b.fees.source, 300),
+    };
+  }
+  return { ...current, construction: c };
 }

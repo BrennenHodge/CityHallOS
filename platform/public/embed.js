@@ -31,6 +31,8 @@
     camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
     ext: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
     check: '<path d="M20 6 9 17l-5-5"/>',
+    build: '<path d="M3 21h18M5 21V10l7-5 7 5v11"/><path d="M9 21v-6h6v6"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
     phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2Z"/>',
   };
   const icon = (n, size = 18) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -38,6 +40,9 @@
   const VERIFY_NOTE = { historical: 'Historical', secondary: 'News report', unverified: 'Needs confirmation', official_unverified: 'Published version' };
   const STATUS = { new: 'Received', needs_info: 'Needs information', assigned: 'Assigned to a crew', in_progress: 'In progress', awaiting_review: 'Awaiting review', resolved: 'Resolved', closed: 'Closed' };
   const STEPS = ['new', 'assigned', 'in_progress', 'resolved'];
+  const PERMIT_STATUS = { submitted: 'Submitted', needs_info: 'Changes requested', fees_due: 'Complete · fee due', in_review: 'Under review', issued: 'Permit issued', closed: 'Closed', denied: 'Not approved', withdrawn: 'Withdrawn', draft: 'Draft' };
+  const PERMIT_STEPS = ['submitted', 'fees_due', 'in_review', 'issued'];
+  const REF = /\b[A-Z]{2,5}-(?:BP-)?\d{4,6}\b/i;
 
   const CSS = `
   :host { all: initial; }
@@ -97,6 +102,12 @@
   .welcome { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 16px; }
   .welcome p { margin: 0 0 12px; }
   .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .tiles.four { grid-template-columns: repeat(2, 1fr); }
+  .tiles.four .tile { grid-template-columns: 34px 1fr; justify-items: start; text-align: left; align-items: center; padding: 10px; }
+  .resume { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; margin-top: 10px; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--brand);
+    background: color-mix(in srgb, var(--brand) 6%, #fff); cursor: pointer; }
+  .resume b { display: block; font-size: 13.5px; } .resume small { color: var(--muted); font-size: 12px; }
+  .resume .bar { height: 5px; border-radius: 9px; background: var(--soft); margin-top: 5px; overflow: hidden; } .resume .bar i { display: block; height: 100%; background: var(--brand); }
   .tile { display: grid; gap: 6px; justify-items: center; text-align: center; padding: 12px 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--paper);
     cursor: pointer; font-size: 12.5px; font-weight: 600; line-height: 1.25; }
   .tile:hover { border-color: var(--brand); color: var(--brand); }
@@ -144,8 +155,10 @@
     items: Array.isArray(saved.items) ? saved.items.slice(-40) : [],
     flow: saved.flow || null,
     open: PAGE || saved.open || script.dataset.open === 'true',
+    permit: saved.permit || null,
   };
-  const persist = () => store.save({ convoId: state.convoId, items: state.items.slice(-40), flow: state.flow ? { ...state.flow, photo: null } : null, open: state.open, nudged: saved.nudged });
+  const persist = () => store.save({ convoId: state.convoId, items: state.items.slice(-40), flow: state.flow ? { ...state.flow, photo: null } : null, open: state.open, nudged: saved.nudged, permit: state.permit });
+  const permitList = () => { try { return JSON.parse(localStorage.getItem(`chos:${CITY}:permit:list`)) || []; } catch { return []; } };
   let photoFile = null;
 
   const host = document.createElement('div');
@@ -233,6 +246,7 @@
     root.querySelector('#log').addEventListener('click', onLogClick);
     drawLog();
     drawFlowHint();
+    if (state.permit?.active) { openPermit({ permit: state.permit }); return; }
     if (!PAGE) setTimeout(() => input.focus(), 50);
   }
 
@@ -249,15 +263,27 @@
     if (!log) return;
     const welcome = `<div class="welcome">
         <p>${md(cfg.greeting)}</p>
-        <div class="tiles">
+        <div class="tiles ${cfg.permits ? 'four' : ''}">
+          ${cfg.permits ? `<button class="tile" data-act="permit"><span>${icon('build')}</span>Apply for a construction permit</button>` : ''}
           <button class="tile" data-act="forms"><span>${icon('file')}</span>Permits &amp; forms</button>
           <button class="tile" data-act="report"><span>${icon('alert')}</span>Report an issue</button>
           <button class="tile" data-act="track"><span>${icon('search')}</span>Track a request</button>
         </div>
+        ${resumeCards()}
       </div>
       ${state.items.length ? '' : `<div class="chips">${(cfg.suggestions || []).map((s) => `<button class="chip" data-ask="${esc(s)}">${esc(s)}</button>`).join('')}</div>`}`;
     log.innerHTML = welcome + state.items.map(itemHtml).join('');
     log.scrollTop = log.scrollHeight;
+  }
+
+  // Applications this device started: continue a draft, or check on one already submitted.
+  function resumeCards() {
+    if (!cfg.permits) return '';
+    return permitList().filter((x) => x.status !== 'withdrawn').slice(0, 2).map((x) => `
+      <button class="resume" data-act="permit-resume" data-id="${esc(x.id)}"><span style="color:var(--brand)">${icon('build', 22)}</span>
+        <span style="flex:1;min-width:0"><b>${x.status === 'draft' ? 'Continue your permit application' : `Permit application ${esc(x.ref || '')}`}</b>
+        <small>${esc(x.address || 'Construction permit')} · ${x.status === 'draft' ? `${Number(x.progress) || 0}% done` : esc(PERMIT_STATUS[x.status] || x.status)}</small>
+        ${x.status === 'draft' ? `<div class="bar"><i style="width:${Number(x.progress) || 0}%"></i></div>` : ''}</span></button>`).join('');
   }
 
   function itemHtml(it, i) {
@@ -273,6 +299,7 @@
         <small>${esc(s.category || '')}${s.as_of ? ` · ${esc(s.as_of)}` : ''}${VERIFY_NOTE[s.verification] && s.verification !== 'official_unverified' ? `<span class="tag">${VERIFY_NOTE[s.verification]}</span>` : ''}</small></span></a>`).join('')}</div>` : ''}
       ${f.emergency ? `<div class="actions"><a class="btn danger" href="tel:911">${icon('phone', 15)} Call 911</a></div>` : ''}
       ${f.offerReport && !it.reported ? `<div class="actions"><button class="btn primary" data-act="report-from" data-i="${i}">${icon('alert', 15)} Report this issue</button></div>` : ''}
+      ${f.offerPermit && cfg.permits ? `<div class="actions"><button class="btn primary" data-act="permit-from" data-i="${i}">${icon('build', 15)} Start my permit application</button></div>` : ''}
       ${f.needsStaff ? `<div class="note">${icon('check', 14)} Flagged for City Hall staff to follow up.</div>` : ''}
       ${it.buttons ? `<div class="actions">${it.buttons}</div>` : ''}
     </div>`;
@@ -306,6 +333,14 @@
     else if (a === 'gps') useLocation();
     else if (a === 'photo') pickPhoto();
     else if (a === 'submit') submitReport();
+    else if (a === 'permit') openPermit({});
+    else if (a === 'permit-from') {
+      const q = [...state.items].slice(0, Number(act.dataset.i)).reverse().find((x) => x.role === 'user');
+      openPermit({ opening: q?.text });
+    } else if (a === 'permit-resume') {
+      const x = permitList().find((p) => p.id === act.dataset.id);
+      if (x) openPermit({ permit: { id: x.id, token: x.token } });
+    }
     else if (a === 'cancel-flow') cancelFlow();
   }
 
@@ -328,9 +363,9 @@
 
   async function handleInput(text) {
     if (state.flow?.name === 'report' && state.flow.step !== 'confirm') { push({ role: 'user', text }); flowAnswer(text); return; }
-    if (state.flow?.name === 'track' || /\b[A-Z]{2,5}-\d{4,6}\b/i.test(text) && /status|track|update|where|check|^\s*[A-Z]{2,5}-\d+\s*$/i.test(text)) {
+    if (state.flow?.name === 'track' || REF.test(text) && /status|track|update|where|check|^\s*[A-Z]{2,5}-(BP-)?\d+\s*$/i.test(text)) {
       push({ role: 'user', text });
-      const ref = (text.match(/[A-Z]{2,5}-\d{4,6}/i) || [text.trim()])[0];
+      const ref = (text.match(REF) || [text.trim()])[0];
       state.flow = null; persist(); drawFlowHint();
       return track(ref);
     }
@@ -398,7 +433,19 @@
       const res = await fetch(`${API}/track/${encodeURIComponent(ref.toUpperCase())}`);
       const r = await res.json();
       state.items.pop();
-      if (!res.ok) { bot(`I couldn't find a request numbered **${esc(ref.toUpperCase())}**. Check the number and try again, or call City Hall at ${cfg.phone}.`); return; }
+      if (!res.ok) { bot(`I couldn't find a request numbered **${ref.toUpperCase()}**. Check the number and try again, or call City Hall at ${cfg.phone}.`); return; }
+      if (r.type === 'permit') {
+        const at = PERMIT_STEPS.indexOf(r.status === 'closed' ? 'issued' : r.status === 'needs_info' ? 'submitted' : r.status);
+        const mine = permitList().find((x) => x.ref === r.ref);
+        card(`<div class="ref">${esc(r.ref)}</div><h3>${esc(PERMIT_STATUS[r.status] || r.status)}</h3>
+          ${at >= 0 ? `<div class="progress">${PERMIT_STEPS.map((s, i) => `<i class="${i <= at ? 'on' : ''}"></i>`).join('')}</div>` : ''}
+          <div class="row"><b>Type</b><span>Construction permit</span></div>
+          ${r.permit_number ? `<div class="row"><b>Permit no.</b><span>${esc(r.permit_number)}</span></div>` : ''}
+          <div class="row"><b>Submitted</b><span>${r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '—'}</span></div>
+          <div class="row"><b>Last update</b><span>${new Date(r.updated_at).toLocaleString()}</span></div>
+          ${mine ? `<div class="actions"><button class="btn primary" data-act="permit-resume" data-id="${esc(mine.id)}">${icon('build', 15)} Open my application</button></div>` : ''}`);
+        return;
+      }
       const at = Math.max(0, STEPS.indexOf(r.status === 'closed' ? 'resolved' : r.status === 'needs_info' ? 'new' : r.status === 'awaiting_review' ? 'in_progress' : r.status));
       card(`<div class="ref">${esc(r.ref)}</div><h3>${esc(STATUS[r.status] || r.status)}</h3>
         <div class="progress">${STEPS.map((s, i) => `<i class="${i <= at ? 'on' : ''}"></i>`).join('')}</div>
@@ -527,7 +574,35 @@
     persist(); drawFlowHint();
   }
 
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.open && !PAGE) setOpen(false); });
+  /* ---------------- Permit applications (permit.js, loaded on demand) ---------------- */
+
+  let permitScript = null;
+  function openPermit({ permit = null, opening = '' }) {
+    state.permit = { ...(permit || {}), active: true };
+    if (!state.open) { state.open = true; persist(); render(); return; }
+    persist();
+    permitScript = permitScript || new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = `${ORIGIN}/permit.js?v=6`; el.async = true; el.onload = resolve; el.onerror = reject;
+      document.head.appendChild(el);
+    });
+    permitScript.then(() => window.__chosPermit.mount({
+      root, api: API, origin: ORIGIN, city: CITY, cfg, esc, md, icon, cityName: cfg.cityName, phone: cfg.phone,
+      permit: permit?.id ? permit : null, opening, convoId: state.convoId,
+      onChange: (x) => { state.permit = { id: x.id, token: x.token, active: true }; persist(); },
+      onClose: () => { state.permit = { ...state.permit, active: false }; persist(); render(); },
+    })).catch(() => { permitScript = null; state.permit = null; persist(); render(); bot(`The permit application couldn't load. Please try again, or call City Hall at ${cfg.phone}.`); });
+  }
+
+  // A secret application link (from an email or text) opens that application directly.
+  const linked = location.hash.match(/#permit=(p[a-f0-9]{12})\.([\w-]{16,64})/);
+  if (linked) {
+    state.permit = { id: linked[1], token: linked[2], active: true };
+    state.open = true; persist();
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.open && !PAGE && !state.permit?.active) setOpen(false); });
 
   fetch(`${API}/config`).then((r) => r.json()).then((c) => { cfg = c; render(); }).catch(() => { /* stay hidden if the service is unreachable */ });
 })();

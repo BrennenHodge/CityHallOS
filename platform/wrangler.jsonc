@@ -2,6 +2,7 @@
   // City Hall OS platform: staff dashboard, knowledge base API and the embeddable AI City Clerk.
   //   npx wrangler deploy
   // Secrets: ADMIN_KEY (City Hall OS operator access code), ANTHROPIC_API_KEY (optional; uses Claude instead of Workers AI).
+// Optional, for messages to residents: RESEND_API_KEY + NOTIFY_FROM_EMAIL (email), TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_FROM (texts and calls).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "cityhallos-platform",
   "account_id": "d06c70a0b6279642a6243926161f574b",
@@ -33,12 +34,16 @@
     { "name": "LOGIN_LIMIT", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }
   ],
   "routes": [{ "pattern": "app.cityhallos.com", "custom_domain": true }],
+  // Daily permit reminders at 15:00 UTC (9 or 10 am Central). Links in those messages use APP_ORIGIN.
+  "triggers": { "crons": ["0 15 * * *"] },
+  "vars": { "APP_ORIGIN": "https://app.cityhallos.com" },
 
   // Staging: the same code at staging.cityhallos.com with its own database, files and city stores.
   //   npx wrangler deploy --env staging
   "env": {
     "staging": {
       "routes": [{ "pattern": "staging.cityhallos.com", "custom_domain": true }],
+      "vars": { "APP_ORIGIN": "https://staging.cityhallos.com" },
       "d1_databases": [
         { "binding": "DB", "database_name": "cityhallos-staging", "database_id": "a88f38be-ab9e-489b-9805-e4d3c532cb8b" }
       ],

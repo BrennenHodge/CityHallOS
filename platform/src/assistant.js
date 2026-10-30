@@ -34,6 +34,11 @@ export function detectReport(text) {
   return null;
 }
 
+// A resident describing building work, or asking for a construction permit, can start an application.
+const PERMIT_WORK = /\b(build|construct|put up|erect|add(ing)? (on|an? addition|a room)|addition|remodel|renovat\w*|demolish|tear down|pour (a )?slab)\b/i;
+const PERMIT_THING = /\b(garage|carport|shed|house|home|addition|room|porch|deck|building|barn|workshop|slab|structure|office|store|church|duplex|bedroom|bathroom|kitchen)\b/i;
+export const detectPermit = (text) => (PERMIT_WORK.test(text) && PERMIT_THING.test(text)) || /\b(building|construction) permit\b/i.test(text);
+
 const VERIFICATION_NOTE = {
   verified_current: 'verified current by City Hall',
   official_unverified: 'official, not yet confirmed current',
@@ -132,6 +137,34 @@ export async function* generate(env, system, messages) {
 }
 
 export const modelName = (env) => (env.ANTHROPIC_API_KEY ? CLAUDE_MODEL : WORKERS_AI_MODEL);
+
+// One JSON answer, not streamed. Used by workflows that read or check structured data.
+export async function completeJson(env, system, user, maxTokens = 1500) {
+  let text;
+  if (env.ANTHROPIC_API_KEY) {
+    const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+    const msg = await client.beta.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: maxTokens,
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      output_config: { effort: 'low' },
+      system,
+      messages: [{ role: 'user', content: user }],
+    });
+    text = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+  } else {
+    const res = await env.AI.run(WORKERS_AI_MODEL, {
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
+    });
+    text = typeof res.response === 'string' ? res.response : JSON.stringify(res.response ?? '');
+  }
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('The model did not return JSON');
+  return JSON.parse(m[0]);
+}
 
 // Removes control tokens from streamed text without splitting them across chunks.
 export function tokenFilter() {

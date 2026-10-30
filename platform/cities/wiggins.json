@@ -30,6 +30,68 @@
       "How do I pay my water bill?",
       "Where can I find the city ordinances?",
       "When is municipal court held?"
-    ]
+    ],
+    "permits": {
+      "construction": {
+        "enabled": true,
+        "department": "planning-building",
+        "autoReturn": true,
+        "formUrl": "https://www.cityofwiggins.gov/DocumentCenter/View/288",
+        "pdfTemplate": "wiggins-2018",
+        "paymentInstructions": "Pay at City Hall, 117 First Street North, Wiggins. Call 601-928-7221 to confirm accepted payment methods.",
+        "fees": {
+          "tiers": [
+            {
+              "upTo": 1000,
+              "fee": 15
+            },
+            {
+              "upTo": 3000,
+              "fee": 30
+            },
+            {
+              "upTo": 5000,
+              "fee": 50
+            },
+            {
+              "upTo": 50000,
+              "base": 62,
+              "over": 6000,
+              "per": 1000,
+              "add": 4.5
+            },
+            {
+              "upTo": 100000,
+              "base": 260,
+              "over": 50000,
+              "per": 1000,
+              "add": 4
+            },
+            {
+              "upTo": 500000,
+              "base": 460,
+              "over": 100000,
+              "per": 1000,
+              "add": 3.5
+            },
+            {
+              "upTo": null,
+              "base": 1860,
+              "over": 500000,
+              "per": 1000,
+              "add": 3
+            }
+          ],
+          "doubleIfStarted": true,
+          "planReviewShare": 0.5,
+          "notes": [
+            "Inspections are billed separately: $65 each, or $250 for up to 4 and $480 for up to 8.",
+            "Property in a FEMA flood zone also needs a floodplain development permit: $50 residential, $225 commercial.",
+            "A certificate of occupancy is $25 residential, $100 commercial."
+          ],
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount."
+        }
+      }
+    }
   }
 }
