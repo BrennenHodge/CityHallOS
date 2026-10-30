@@ -93,7 +93,7 @@ h1, h2, h3 { font-family: var(--font-display); letter-spacing: -.02em; margin: 0
 
 /* ---------- Shell ---------- */
 .shell { display: grid; grid-template-columns: var(--side) 1fr; min-height: 100%; }
-.side { position: sticky; top: 0; height: 100vh; background: var(--night); color: var(--night-text); display: flex; flex-direction: column; padding: 18px 14px; border-right: 1px solid var(--night-line); }
+.side { position: sticky; top: 0; height: 100vh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--night-line) transparent; background: var(--night); color: var(--night-text); display: flex; flex-direction: column; padding: 18px 14px; border-right: 1px solid var(--night-line); }
 .brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 700; font-size: 17px; letter-spacing: -.02em; color: #fff; }
 .brand img { width: 30px; height: 30px; }
 .brand span span { color: #8fa9ff; }

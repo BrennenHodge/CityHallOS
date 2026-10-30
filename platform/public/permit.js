@@ -1,8 +1,8 @@
 /*!
  * City Hall OS: guided applications (construction permit, variance, sign permit, certificate of occupancy, ...).
  * Loaded by embed.js when a resident starts or resumes an application. The chat panel grows into a full-screen
- * workspace: the conversation on the left, the application on the right, filling in as the resident answers.
- * On a phone the two are tabs. Residents can ask what anything means at any point; the assistant answers and
+ * workspace laid out like a dashboard: the sections on the left, the application in the middle, filling in as the
+ * resident answers, and the conversation on the right. On a phone the conversation and the application are tabs. Residents can ask what anything means at any point; the assistant answers and
  * then repeats the question. Every answer is saved as it is given, so the application can be finished later from
  * the same secret link, or from My applications after signing in with a phone number.
  * Everything form-specific (fields, statuses, steps, what gets issued) comes from the form's schema.
@@ -20,84 +20,173 @@
 
   const CSS = `
   .panel { transition: right .5s cubic-bezier(.2,.8,.2,1), bottom .5s cubic-bezier(.2,.8,.2,1), width .5s cubic-bezier(.2,.8,.2,1), height .5s cubic-bezier(.2,.8,.2,1), border-radius .5s; }
-  .root.permit:not(.page) .panel { right: 12px; bottom: 12px; width: calc(100vw - 24px); height: calc(100vh - 24px); border-radius: 18px; }
+  .root.permit:not(.page) .panel { right: 0; bottom: 0; width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; }
   .root.permit.page .panel { position: fixed; inset: 0; z-index: 2147483001; width: auto; height: auto; border-radius: 0; animation: grow .4s cubic-bezier(.2,.8,.2,1); }
   @keyframes grow { from { opacity: .4; transform: scale(.97); } }
-  .ws { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(330px, 420px) 1fr; background: var(--paper); }
-  .ws-chat { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--paper); }
-  .ws-sheet { min-height: 0; overflow-y: auto; background: #f6f4ee; scroll-behavior: smooth; }
-  .ws-tabs { display: none; }
-  .head .sub2 { font-size: 12px; opacity: .85; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .root.permit { --field: #d9d5ca; --canvas: #f4f3ee; }
+
+  /* Top bar */
+  .root.permit .head { background: #fff; color: var(--ink); border-bottom: 1px solid var(--line); padding: 10px 14px 10px 16px; min-height: 62px; }
+  .root.permit .head .avatar { width: 38px; height: 38px; background: color-mix(in srgb, var(--brand) 12%, #fff); color: var(--brand); }
+  .root.permit .head h2 { font-size: 15.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .root.permit .head .tools { gap: 8px; }
+  .root.permit .icon-btn:hover { background: var(--soft); }
+  .head .sub2 { margin: 1px 0 0; font-size: 12.5px; color: var(--muted); opacity: 1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .head .sub2 b { color: var(--ink); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; }
   .saved { display: inline-flex; gap: 4px; align-items: center; }
-  .hbar { height: 4px; background: rgba(255,255,255,.18); }
-  .hbar i { display: block; height: 100%; background: #4ade80; transition: width .6s ease; }
-  .head .tbtn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 11px; border-radius: 10px; border: 1px solid rgba(255,255,255,.28); background: transparent; color: #fff; cursor: pointer; font-weight: 600; font-size: 13px; }
-  .head .tbtn:hover { background: rgba(255,255,255,.12); }
-  .head h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .qhelp { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; border-radius: 50%; border: 1px solid var(--line); background: #fff; color: var(--brand); font-size: 11px; font-weight: 800; cursor: pointer; vertical-align: 1px; padding: 0; }
-  .qhelp:hover { border-color: var(--brand); }
+  .pill { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 650; background: var(--soft); color: var(--ink); white-space: nowrap; }
+  .pill.live { background: color-mix(in srgb, var(--brand) 12%, #fff); color: var(--brand); }
+  .pill.warn { background: #fff1d6; color: #8a5100; } .pill.ok { background: #e2f3ea; color: #0f7a55; } .pill.bad { background: #fde8e6; color: #b42318; }
+  .head .tbtn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; font-weight: 600; font-size: 13px; }
+  .head .tbtn:hover { border-color: var(--brand); color: var(--brand); }
+  .hbar { height: 3px; background: var(--soft); }
+  .hbar i { display: block; height: 100%; background: var(--brand); transition: width .6s ease; }
+
+  /* Workspace: sections rail, the application, the assistant */
+  .ws { flex: 1; min-height: 0; display: grid; grid-template-columns: 264px minmax(0, 1fr) minmax(360px, 410px); grid-template-areas: "rail sheet chat"; background: var(--canvas); }
+  .ws-rail { grid-area: rail; min-height: 0; overflow-y: auto; border-right: 1px solid var(--line); background: var(--paper); padding: 18px 12px 14px; display: flex; flex-direction: column; gap: 16px; }
+  .ws-sheet { grid-area: sheet; min-height: 0; overflow-y: auto; background: var(--canvas); scroll-behavior: smooth; }
+  .ws-chat { grid-area: chat; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: #fff; }
+  .ws-tabs, .ws-dock { display: none; }
+
+  /* Assistant */
+  .chat-h { display: flex; gap: 10px; align-items: center; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  .chat-h .spark { width: 32px; height: 32px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--brand); color: #fff; }
+  .chat-h b { display: block; font-size: 14px; } .chat-h small { display: block; color: var(--muted); font-size: 12px; line-height: 1.3; }
+  .ws-chat .log { padding: 18px 16px; gap: 12px; }
+  .ws-chat .msg { max-width: 92%; }
+  .ws-chat .bot { background: var(--canvas); border-color: transparent; }
+  .ws-chat .composer { border-top: 0; padding: 8px 14px; }
+  .ws-chat .composer textarea { background: #fff; border-color: var(--field); }
+  .ws-chat .foot { padding: 0 16px 12px; }
   .askhint { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .opt { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 7px 12px; font-size: 13.5px; cursor: pointer; text-align: left; line-height: 1.3; font-weight: 550; }
+  .opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .opt { border: 1px solid var(--field); background: #fff; border-radius: 999px; padding: 7px 13px; font-size: 13.5px; cursor: pointer; text-align: left; line-height: 1.3; font-weight: 550; }
   .opt:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
   .opt:disabled { opacity: .45; cursor: default; }
   .btn:disabled { opacity: .5; cursor: default; }
   .opt.long { border-radius: 12px; width: 100%; }
-  .sheet { max-width: 860px; margin: 0 auto; padding: 22px 26px 60px; display: grid; gap: 16px; }
-  .sheet h1 { font-size: 22px; margin: 0; letter-spacing: -.02em; }
-  .sheet .lede { color: var(--muted); font-size: 13.5px; margin: 2px 0 0; }
-  .steps { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; position: sticky; top: 0; z-index: 2; background: #f6f4ee; padding-top: 6px; }
-  .step { flex: none; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 5px 11px 5px 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--ink); }
-  .step b { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--soft); font-size: 10.5px; }
+
+  /* Sections rail */
+  .rail-prog { display: flex; gap: 12px; align-items: center; padding: 0 8px; }
+  .ring { width: 52px; height: 52px; flex: none; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--brand) calc(var(--p) * 1%), #e5e2d8 0); }
+  .ring span { width: 42px; height: 42px; border-radius: 50%; background: var(--paper); display: grid; place-items: center; font-size: 12.5px; font-weight: 750; font-variant-numeric: tabular-nums; }
+  .rail-prog b { display: block; font-size: 14px; } .rail-prog small { display: block; color: var(--muted); font-size: 12px; line-height: 1.35; }
+  .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .rail-nav { display: grid; gap: 2px; }
+  .rail-nav .eyebrow { padding: 0 8px 6px; }
+  .rn { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; text-align: left; border: 0; background: none; padding: 7px 8px; border-radius: 10px; cursor: pointer; font-size: 13.5px; font-weight: 550; color: var(--ink); }
+  .rn:hover { background: var(--soft); }
+  .rn.on { background: #fff; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(11,19,36,.06); font-weight: 650; }
+  .rn b { width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center; background: #ebe8de; font-size: 11.5px; font-weight: 700; }
+  .rn.done b { background: var(--brand); color: #fff; } .rn.err b { background: #fde8e6; color: #b42318; }
+  .rn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rn small { font-size: 11.5px; color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .rail-card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: grid; gap: 3px; }
+  .rail-card .v { font-weight: 650; font-size: 14px; line-height: 1.35; }
+  .rail-card .big { font-size: 21px; font-weight: 750; letter-spacing: -.01em; }
+  .rail-card small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+  .rail-card .badges { margin-top: 4px; }
+  .rail-help { margin-top: auto; font-size: 12.5px; color: var(--muted); padding: 0 8px; line-height: 1.45; }
+  .rail-help a { color: var(--brand); font-weight: 650; text-decoration: none; }
+
+  /* The application */
+  .sheet { max-width: 800px; margin: 0 auto; padding: 26px 28px 80px; display: grid; gap: 16px; }
+  .page-h h1 { font-size: 24px; margin: 3px 0 0; letter-spacing: -.02em; line-height: 1.2; }
+  .tip { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+  .tip .qhelp { margin: 0; flex: none; pointer-events: none; }
+  .sum-inline, .steps { display: none; }
+  .summary { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 18px; }
+  .summary .v { font-weight: 650; font-size: 14.5px; line-height: 1.35; }
+  .summary .big { font-size: 19px; font-weight: 750; text-align: right; }
+  .summary .r { text-align: right; }
+  .summary small { color: var(--muted); font-size: 12px; }
+  .summary > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .steps { gap: 6px; overflow-x: auto; position: sticky; top: 0; z-index: 2; background: var(--canvas); padding: 8px 0; margin: -8px 0; scrollbar-width: none; }
+  .steps::-webkit-scrollbar { display: none; }
+  .step { flex: none; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 5px 12px 5px 6px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--ink); }
+  .step b { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--soft); font-size: 11px; }
+  .step.on { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
   .step.done b { background: var(--brand); color: #fff; }
   .step.err b { background: #fde8e6; color: #b42318; }
-  .sec { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 14px; scroll-margin-top: 50px; }
-  .sec-h { display: flex; align-items: center; gap: 10px; }
-  .sec-h h2 { margin: 0; font-size: 15.5px; }
-  .sec-h .n { width: 24px; height: 24px; border-radius: 8px; background: var(--soft); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .sec { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px 22px 22px; display: grid; gap: 18px; scroll-margin-top: 16px; box-shadow: 0 1px 2px rgba(11,19,36,.03); }
+  .sec-h { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; margin: 0 -22px; padding-left: 22px; padding-right: 22px; border-bottom: 1px solid #efece4; }
+  .sec-h h2 { margin: 0; font-size: 16px; letter-spacing: -.01em; flex: 1; }
+  .sec-h .n { width: 26px; height: 26px; flex: none; border-radius: 8px; background: var(--soft); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .sec-h .cnt { font-size: 12px; color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
   .sec.done .sec-h .n { background: var(--brand); color: #fff; }
-  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px 14px; }
-  .fld { grid-column: span 6; display: grid; gap: 5px; border-radius: 10px; transition: background .6s, box-shadow .6s; }
+  .sec.done .sec-h .cnt { color: #0f7a55; }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 18px 16px; }
+  .fld { grid-column: span 6; display: grid; gap: 7px; align-content: start; border-radius: 10px; transition: background .6s, box-shadow .6s; }
   .fld.half { grid-column: span 3; }
-  .fld.third { grid-column: span 2; }
-  .fld > label, .fld > .lbl { font-size: 12.5px; font-weight: 650; color: #2d3748; }
+  .fld > .lbl { font-size: 13.5px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 6px; line-height: 1.35; }
+  .fld > .lbl label { cursor: pointer; }
+  .fld .hint { color: var(--muted); font-size: 12.5px; line-height: 1.4; margin-top: -3px; }
   .fld small { color: var(--muted); font-size: 12px; }
   .fld input[type=text], .fld input[type=email], .fld input[type=tel], .fld input[type=number], .fld textarea, .fld select {
-    width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; background: var(--paper); outline: none; font-size: 14px; }
-  .fld input:focus, .fld textarea:focus, .fld select:focus { border-color: var(--brand); background: #fff; }
-  .fld textarea { min-height: 70px; resize: vertical; }
-  .fld.flash { background: color-mix(in srgb, var(--brand) 10%, #fff); box-shadow: 0 0 0 6px color-mix(in srgb, var(--brand) 10%, #fff); }
-  .fld .money { position: relative; } .fld .money span { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--muted); }
-  .fld .money input { padding-left: 22px; }
-  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
-  .seg button { border: 1px solid var(--line); background: var(--paper); border-radius: 10px; padding: 7px 11px; cursor: pointer; font-size: 13.5px; font-weight: 550; }
+    width: 100%; height: 44px; border: 1px solid var(--field); border-radius: 10px; padding: 0 12px; background: #fff; outline: none; font-size: 14.5px; transition: border-color .15s, box-shadow .15s; }
+  .fld textarea { height: auto; min-height: 88px; padding: 10px 12px; resize: vertical; line-height: 1.45; }
+  .fld input:hover:not(:disabled), .fld textarea:hover:not(:disabled), .fld select:hover:not(:disabled) { border-color: #c4bfb1; }
+  .fld input:focus, .fld textarea:focus, .fld select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 16%, transparent); }
+  .fld input:disabled, .fld textarea:disabled, .fld select:disabled { background: var(--paper); color: var(--ink); }
+  .fld input::placeholder, .fld textarea::placeholder { color: #9aa1ad; }
+  .fld.flash { background: color-mix(in srgb, var(--brand) 9%, #fff); box-shadow: 0 0 0 8px color-mix(in srgb, var(--brand) 9%, #fff); }
+  .fld .money { position: relative; } .fld .money span { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+  .fld .money input { padding-left: 24px; }
+  .qhelp { display: inline-grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: 50%; border: 0; background: var(--soft); color: var(--muted); font-size: 11.5px; font-weight: 800; cursor: pointer; padding: 0; }
+  .qhelp:hover { background: color-mix(in srgb, var(--brand) 14%, #fff); color: var(--brand); }
+  .linkq { border: 0; background: none; color: var(--brand); font-weight: 600; cursor: pointer; padding: 0; font-size: 12.5px; justify-self: start; }
+  .addr { position: relative; }
+  .composer { position: relative; }
+  .addr-sug { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 34px rgba(11,19,36,.16); overflow: hidden; }
+  .composer .addr-sug { top: auto; bottom: calc(100% + 6px); left: 10px; right: 10px; }
+  .addr-sug button { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; padding: 10px 12px; border: 0; background: none; cursor: pointer; font-size: 14px; color: var(--ink); }
+  .addr-sug button svg { flex: none; margin-top: 2px; color: var(--muted); }
+  .addr-sug button.on, .addr-sug button:hover { background: var(--soft); }
+  .addr-sug button small { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .addr-sug .note { padding: 7px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); background: var(--paper); }
+  .addr-ok { color: #0f7a55 !important; display: flex; gap: 5px; align-items: center; }
+  .seg { display: flex; flex-wrap: wrap; gap: 8px; }
+  .seg.many { display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
+  .seg.many button.wide { grid-column: 1 / -1; }
+  .seg button { min-height: 40px; border: 1px solid var(--field); background: #fff; border-radius: 10px; padding: 7px 14px; cursor: pointer; font-size: 14px; font-weight: 550; transition: border-color .15s, background .15s; }
+  .seg button:hover:not(:disabled):not(.on) { border-color: var(--brand); color: var(--brand); }
   .seg button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
-  .radio { display: grid; gap: 6px; }
-  .radio button { text-align: left; border: 1px solid var(--line); background: var(--paper); border-radius: 12px; padding: 10px 12px; cursor: pointer; font-size: 13.5px; display: flex; gap: 10px; }
-  .radio button i { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); margin-top: 2px; }
-  .radio button.on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 7%, #fff); }
-  .radio button.on i { border-color: var(--brand); background: radial-gradient(var(--brand) 45%, transparent 50%); }
-  .chk { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; line-height: 1.45; cursor: pointer; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
-  .chk input { margin-top: 3px; width: 17px; height: 17px; accent-color: var(--brand); flex: none; }
-  .sig input { font-family: "Brush Script MT", "Segoe Script", "Lucida Handwriting", cursive; font-size: 24px !important; padding: 6px 12px !important; }
+  .seg button:disabled { cursor: default; }
+  .seg.yn { display: inline-grid; grid-auto-flow: column; grid-auto-columns: minmax(92px, 1fr); gap: 4px; padding: 4px; border: 1px solid var(--field); border-radius: 12px; background: var(--paper); justify-self: start; }
+  .seg.yn button { border: 0; min-height: 36px; border-radius: 8px; background: transparent; }
+  .seg.yn button.on { background: var(--brand); }
+  .radio { display: grid; gap: 8px; }
+  .radio button { text-align: left; border: 1px solid var(--field); background: #fff; border-radius: 12px; padding: 11px 13px; cursor: pointer; font-size: 14px; display: flex; gap: 10px; line-height: 1.4; }
+  .radio button:hover:not(:disabled) { border-color: #c4bfb1; }
+  .radio button i { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--field); margin-top: 1px; }
+  .radio button.on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, #fff); box-shadow: 0 0 0 1px var(--brand); }
+  .radio button.on i { border-color: var(--brand); background: radial-gradient(var(--brand) 42%, transparent 48%); }
+  .chk { display: flex; gap: 11px; align-items: flex-start; font-size: 14px; line-height: 1.5; cursor: pointer; padding: 12px 14px; border: 1px solid var(--field); border-radius: 12px; background: #fff; }
+  .chk:has(input:checked) { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, #fff); }
+  .chk input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--brand); flex: none; }
+  .sig input { font-family: "Brush Script MT", "Segoe Script", "Lucida Handwriting", cursive; font-size: 24px !important; height: 52px !important; }
   .issue { font-size: 12.5px; display: flex; gap: 6px; align-items: flex-start; line-height: 1.4; }
+  .issue svg { flex: none; margin-top: 2px; }
   .issue.error { color: #b42318; } .issue.warning { color: #8a5100; } .issue.info { color: var(--muted); }
   .issue .ai { font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 4px; background: #efebff; color: #5b3fd1; flex: none; margin-top: 1px; }
-  .summary { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; display: grid; gap: 10px; }
   .badges { display: flex; flex-wrap: wrap; gap: 6px; }
   .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: var(--soft); }
   .badge.ok { background: #e2f3ea; color: #0f7a55; } .badge.warn { background: #fff1d6; color: #8a5100; } .badge.bad { background: #fde8e6; color: #b42318; }
-  .fee { display: grid; gap: 4px; font-size: 13px; }
-  .fee .tot { font-size: 20px; font-weight: 750; letter-spacing: -.01em; }
+  details.more summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
+  details.more ul { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
   .files { display: grid; gap: 6px; }
-  .file { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); font-size: 13px; }
+  .file { display: flex; gap: 10px; align-items: center; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); font-size: 13.5px; }
   .file .k { font-size: 11px; font-weight: 700; color: var(--brand); text-transform: uppercase; letter-spacing: .03em; }
   .file a { color: inherit; text-decoration: none; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px; }
+  .drop { display: grid; gap: 10px; padding: 14px; border: 1.5px dashed var(--field); border-radius: 12px; background: var(--paper); }
   .uprow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .uprow select { width: auto !important; }
-  .final { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 12px; }
+  .uprow select { width: auto !important; flex: 1; min-width: 160px; }
+  .uprow .btn { height: 44px; }
+  .final { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px 22px 22px; display: grid; gap: 14px; scroll-margin-top: 16px; }
   .final .row2 { display: flex; gap: 8px; flex-wrap: wrap; }
+  .final .row2 .btn { height: 44px; padding: 0 16px; font-size: 14px; }
   .issues-box { display: grid; gap: 8px; padding: 12px 14px; border-radius: 12px; background: var(--paper); border: 1px solid var(--line); }
   .issues-box h3 { margin: 0; font-size: 13.5px; }
   .issues-box button.go { border: 0; background: none; color: var(--brand); font-weight: 600; cursor: pointer; padding: 0; font-size: 12.5px; }
@@ -111,30 +200,66 @@
   .tl2 div { display: grid; grid-template-columns: 14px 1fr; gap: 8px; } .tl2 i { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); margin-top: 6px; }
   .corr { background: #fff7e8; border: 1px solid #f5d9a6; border-radius: 14px; padding: 14px 16px; display: grid; gap: 6px; font-size: 13.5px; }
   .corr ul { margin: 0; padding-left: 18px; }
-  .linkbox { display: flex; gap: 6px; } .linkbox input { flex: 1; font-size: 12px !important; font-family: ui-monospace, monospace; }
   .spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: sp .8s linear infinite; display: inline-block; }
   @keyframes sp { to { transform: rotate(360deg); } }
+
+  /* Laptop: no rail; the progress, property and fee move into the application. */
+  @media (max-width: 1199px) {
+    .ws { grid-template-columns: minmax(0, 1fr) minmax(340px, 390px); grid-template-areas: "sheet chat"; }
+    .ws-rail { display: none; }
+    .sum-inline { display: block; }
+    .steps { display: flex; }
+    .sec, .final { scroll-margin-top: 60px; }
+  }
+
+  /* Phone: the assistant and the application are two tabs. */
   @media (max-width: 900px) {
-    .root.permit:not(.page) .panel { right: 0; bottom: 0; width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; }
     .root.permit.page .panel { height: 100dvh; }
-    .ws { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-    .ws-tabs { display: flex; gap: 4px; padding: 8px 10px; background: #fff; border-bottom: 1px solid var(--line); }
-    .ws-tabs button { flex: 1; height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); font-weight: 650; cursor: pointer; font-size: 14px; }
-    .ws-tabs button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
-    .ws[data-tab="chat"] .ws-sheet, .ws[data-tab="form"] .ws-chat { display: none; }
-    .ws-chat { border-right: 0; }
-    .sheet { padding: 14px 12px 50px; gap: 12px; }
-    .sec { padding: 14px; border-radius: 14px; }
-    .fld.half, .fld.third { grid-column: span 3; }
+    .root.permit .head { min-height: 56px; padding: 8px 8px 8px 12px; gap: 10px; }
+    .root.permit .head .avatar { width: 34px; height: 34px; border-radius: 10px; }
+    .root.permit .head h2 { font-size: 15px; }
+    .root.permit .head .tools { gap: 4px; }
+    .head .tbtn { width: 38px; padding: 0; justify-content: center; }
     .head .tbtn .lbl { display: none; }
-    .head .tbtn { padding: 0 9px; }
-    .head h2 { font-size: 15px; }
+    .ws { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: "tabs" "main" "dock"; }
+    .ws-tabs { grid-area: tabs; display: block; padding: 8px 12px; background: #fff; border-bottom: 1px solid var(--line); }
+    .ws-tabs > div { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border-radius: 12px; background: var(--soft); }
+    .ws-tabs button { height: 38px; border: 0; border-radius: 9px; background: transparent; font-weight: 650; font-size: 14px; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+    .ws-tabs button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(11,19,36,.14); }
+    .ws-tabs button .pct { font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--brand) 12%, #fff); color: var(--brand); }
+    .ws-tabs button .pct:empty { display: none; }
+    .ws-sheet, .ws-chat { grid-area: main; }
+    .ws[data-tab="chat"] .ws-sheet, .ws[data-tab="form"] .ws-chat { display: none; }
+    .ws[data-tab="form"] .ws-dock { display: flex; }
+    .ws-dock:empty { display: none !important; }
+    .ws-dock { grid-area: dock; gap: 12px; align-items: center; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: #fff; border-top: 1px solid var(--line); }
+    .ws-dock .dp { flex: 1; min-width: 0; font-size: 12.5px; color: var(--muted); display: grid; gap: 5px; }
+    .ws-dock .dp b { color: var(--ink); }
+    .ws-dock .mini { height: 5px; border-radius: 9px; background: var(--soft); overflow: hidden; } .ws-dock .mini i { display: block; height: 100%; background: var(--brand); }
+    .ws-dock .btn { height: 44px; padding: 0 16px; font-size: 14.5px; border-radius: 12px; }
+    .ws-chat { border-left: 0; }
+    .chat-h { display: none; }
+    .ws-chat .log { padding: 14px 12px; }
+    .ws-chat .foot { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+    .sheet { padding: 16px 12px 28px; gap: 14px; }
+    .page-h h1 { font-size: 20px; }
+    .sec, .final { padding: 14px 16px 18px; border-radius: 14px; gap: 16px; scroll-margin-top: 58px; }
+    .sec-h { margin: 0 -16px; padding: 0 16px 12px; }
+    .steps { margin: -8px -12px; padding: 8px 12px; }
+    .summary { padding: 12px 14px; }
     /* Thumb-sized choices, and 16px text so phones don't zoom into fields. */
     .opt { padding: 10px 14px; font-size: 15px; }
-    .seg button { padding: 9px 12px; font-size: 14.5px; }
-    .fld input[type=text], .fld input[type=email], .fld input[type=tel], .fld input[type=number], .fld textarea, .fld select { font-size: 16px; padding: 10px 12px; }
+    .seg button { min-height: 46px; font-size: 15px; }
+    .seg.yn { justify-self: stretch; }
+    .seg.yn button { min-height: 40px; }
+    .radio button, .chk { font-size: 15px; padding: 13px 14px; }
+    .fld input[type=text], .fld input[type=email], .fld input[type=tel], .fld input[type=number], .fld textarea, .fld select { font-size: 16px; height: 48px; }
+    .fld textarea { height: auto; }
     .composer textarea { font-size: 16px; }
-    .steps { margin: 0 -12px; padding-left: 12px; padding-right: 12px; }
+    .final .row2 .btn { flex: 1; justify-content: center; height: 48px; }
+  }
+  @media (max-width: 560px) {
+    .fld.half { grid-column: span 6; }
   }`;
 
   async function mount(o) {
@@ -148,7 +273,7 @@
       get(k) { try { return JSON.parse(localStorage.getItem(LS + k)); } catch { return null; } },
       set(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
     };
-    const S = { showErrors: false, id: o.permit?.id || null, token: o.permit?.token || null, kind: o.kind || 'construction', app: null, schema: null, msgs: [], busy: false, tab: 'chat', pending: {}, saveTimer: 0, savedAt: null, saving: false, reviewing: false, closed: false, poll: 0, signIn: null };
+    const S = { showErrors: false, id: o.permit?.id || null, token: o.permit?.token || null, kind: o.kind || 'construction', app: null, schema: null, msgs: [], busy: false, tab: 'chat', pending: {}, typed: {}, place: null, drawing: false, saveTimer: 0, savedAt: null, saving: false, reviewing: false, closed: false, poll: 0, signIn: null };
     const $ = (s) => root.querySelector(s);
     const link = () => `${o.origin}/${city}/#permit=${S.id}.${S.token}`;
     let STATUS = {};
@@ -197,8 +322,11 @@
         </header>
         <div class="hbar"><i id="pBar" style="width:0"></i></div>
         <div class="ws" id="ws" data-tab="${S.tab}">
-          <div class="ws-tabs"><button data-tab="chat">Assistant</button><button data-tab="form">Application <span id="pPct"></span></button></div>
+          <div class="ws-tabs"><div role="tablist"><button data-tab="chat" role="tab">${icon('chat', 15)} Assistant</button><button data-tab="form" role="tab">${icon('file', 15)} Application <span class="pct" id="pPct"></span></button></div></div>
+          <aside class="ws-rail" id="pRail" aria-label="Sections"></aside>
+          <section class="ws-sheet" id="pSheetWrap"><div class="sheet" id="pSheet"><div style="padding:40px;text-align:center;color:var(--muted)"><span class="spin"></span></div></div></section>
           <section class="ws-chat">
+            <div class="chat-h"><span class="spark">${icon('chat', 17)}</span><div><b>Assistant</b><small>Fills in the form as you answer. Ask what anything means.</small></div></div>
             <div class="log" id="pLog" aria-live="polite"></div>
             <form class="composer" id="pForm">
               <textarea id="pInput" rows="1" placeholder="Answer, or ask a question…" aria-label="Your answer or question" enterkeyhint="send"></textarea>
@@ -206,22 +334,44 @@
             </form>
             <div class="foot"><span>Answers save automatically</span><span>Emergency? Call <a href="tel:911">911</a></span></div>
           </section>
-          <section class="ws-sheet" id="pSheetWrap"><div class="sheet" id="pSheet"><div style="padding:40px;text-align:center;color:var(--muted)"><span class="spin"></span></div></div></section>
+          <div class="ws-dock" id="pDock"></div>
         </div>`;
       $('#pMin').onclick = close;
       $('#pPdf').onclick = openPdf;
       $('#pLater').onclick = finishLater;
       root.querySelectorAll('.ws-tabs button').forEach((b) => { b.onclick = () => setTab(b.dataset.tab); });
+      $('#pRail').addEventListener('click', onSheetClick);
+      $('#pDock').addEventListener('click', (e) => { if (e.target.closest('[data-tab]')) setTab('chat'); else onSheetClick(e); });
+      let spying = 0;
+      $('#pSheetWrap').addEventListener('scroll', () => { cancelAnimationFrame(spying); spying = requestAnimationFrame(spy); }, { passive: true });
       const input = $('#pInput');
-      input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(120, input.scrollHeight)}px`; });
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#pForm').requestSubmit(); } });
-      $('#pForm').onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); if (!v || S.busy) return; input.value = ''; input.style.height = ''; send({ text: v }); };
+      input.addEventListener('input', () => {
+        input.style.height = 'auto'; input.style.height = `${Math.min(120, input.scrollHeight)}px`;
+        // While the chat is asking for the property address, suggest addresses as they type.
+        if (S.app?.editable && S.app.ask?.fields?.includes(S.schema.addressField)) addrSuggest(input, (text, place) => { input.value = ''; input.style.height = ''; me(text); send({ text, place }, true); });
+        else if (A.input === input) addrClose();
+      });
+      input.addEventListener('keydown', (e) => {
+        if (A.input === input && addrKey(e)) return;
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#pForm').requestSubmit(); }
+      });
+      input.addEventListener('blur', () => { if (A.input === input) addrClose(); });
+      $('#pForm').onsubmit = (e) => { e.preventDefault(); addrClose(); const v = input.value.trim(); if (!v || S.busy) return; input.value = ''; input.style.height = ''; send({ text: v }); };
       $('#pLog').addEventListener('click', onChatClick);
       const sheet = $('#pSheet');
       sheet.addEventListener('input', onFieldInput);
       sheet.addEventListener('change', onFieldChange);
       sheet.addEventListener('click', onSheetClick);
-      sheet.addEventListener('focusout', (e) => { if (e.target.dataset?.key) flush(); });
+      sheet.addEventListener('keydown', (e) => {
+        if (!e.target.dataset?.addr) return;
+        if (A.input === e.target && addrKey(e)) return;
+        if (e.key === 'Enter') { e.preventDefault(); addrClose(); addrCommit(e.target); }
+      });
+      sheet.addEventListener('focusout', (e) => {
+        if (S.drawing || !e.target.dataset?.key) return;
+        if (e.target.dataset.addr) { addrClose(); addrCommit(e.target); return; }
+        flush();
+      });
       setTab(S.tab);
     }
 
@@ -236,10 +386,12 @@
       root.querySelectorAll('.ws-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     }
 
+    const PILL = { draft: '', needs_info: 'warn', fees_due: 'warn', issued: 'ok', closed: 'ok', denied: 'bad', withdrawn: '' };
+    const statusPill = (st) => `<span class="pill ${PILL[st] ?? 'live'}">${esc((STATUS[st] || [st])[0])}</span>`;
+
     function drawHead() {
       const a = S.app; if (!a) return;
-      const [label] = STATUS[a.status] || [a.status];
-      $('#pSub').innerHTML = `<span>${a.ref ? `<b>${esc(a.ref)}</b> · ` : ''}${esc(label)}</span>${a.editable && (S.saving || S.savedAt) ? `<span>·</span><span class="saved" id="pSaved">${S.saving ? 'Saving…' : `${icon('check', 12)} Saved`}</span>` : ''}`;
+      $('#pSub').innerHTML = `${statusPill(a.status)}${a.ref ? `<b>${esc(a.ref)}</b>` : ''}${a.editable && (S.saving || S.savedAt) ? `<span class="saved" id="pSaved">${S.saving ? 'Saving…' : `${icon('check', 12)} Saved`}</span>` : ''}`;
       $('#pBar').style.width = `${a.status === 'draft' || a.status === 'needs_info' ? a.progress : 100}%`;
       $('#pPct').textContent = a.editable ? `${a.progress}%` : '';
     }
@@ -295,6 +447,7 @@
         S.msgs.pop();
         setApp(v, v.changed);
         if (v.reply) say(v.reply, v.suggest ? { suggest: v.suggest } : {});
+        if (v.screenNote) sayScreen(v.screenNote);
         askMsg(v.ask);
       } catch (err) {
         S.msgs.pop(); say(err.message);
@@ -307,7 +460,7 @@
 
     const fieldLabel = (k) => S.schema.sections.flatMap((x) => x.fields).find((f) => f.key === k)?.label || k;
     const kindLabel = (k) => (S.schema?.docKinds.find(([v]) => v === k) || [])[1] || k;
-    const val = (k) => (k in S.pending ? S.pending[k] : S.app.data[k]);
+    const val = (k) => (k in S.typed ? S.typed[k] : k in S.pending ? S.pending[k] : S.app.data[k]);
     function shown(f) {
       if (!f.when) return true;
       return Object.entries(f.when).every(([k, v]) => {
@@ -340,60 +493,118 @@
       switch (f.type) {
         case 'longtext': input = `<textarea id="${id}" data-key="${f.key}" ${dis} placeholder="${esc(f.placeholder || '')}">${esc(v ?? '')}</textarea>`; break;
         case 'select': input = f.options.length <= 6 || f.key === 'zoning'
-          ? `<div class="seg" role="radiogroup">${f.options.map(([o, l]) => `<button type="button" class="${v === o ? 'on' : ''}" data-set="${f.key}" data-v="${esc(o)}" ${dis}>${esc(l)}</button>`).join('')}</div>`
+          ? `<div class="seg ${f.options.length > 6 ? 'many' : ''}" role="radiogroup">${f.options.map(([o, l]) => `<button type="button" class="${v === o ? 'on' : ''} ${l.length > 14 ? 'wide' : ''}" data-set="${f.key}" data-v="${esc(o)}" ${dis}>${esc(l)}</button>`).join('')}</div>`
           : `<select id="${id}" data-key="${f.key}" ${dis}><option value="">Choose…</option>${f.options.map(([o, l]) => `<option value="${esc(o)}" ${v === o ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`; break;
         case 'radio': input = `<div class="radio">${f.options.map(([o, l]) => `<button type="button" class="${v === o ? 'on' : ''}" data-set="${f.key}" data-v="${esc(o)}" ${dis}><i></i><span>${esc(l)}</span></button>`).join('')}</div>`; break;
         case 'multi': input = `<div class="seg">${f.options.map(([o, l]) => `<button type="button" class="${(v || []).includes(o) ? 'on' : ''}" data-toggle="${f.key}" data-v="${esc(o)}" ${dis}>${esc(l)}</button>`).join('')}</div>`; break;
-        case 'bool': input = `<div class="seg">${[[true, 'Yes'], [false, 'No']].map(([o, l]) => `<button type="button" class="${v === o ? 'on' : ''}" data-set="${f.key}" data-v="${o}" ${dis}>${l}</button>`).join('')}</div>`; break;
-        case 'check': return `<div class="fld" data-f="${f.key}"><label class="chk"><input type="checkbox" data-key="${f.key}" ${v ? 'checked' : ''} ${dis}><span>${esc(f.label)}</span></label>${f.explain && S.app.editable ? `<small><button type="button" class="go" style="border:0;background:none;color:var(--brand);font-weight:600;cursor:pointer;padding:0" data-help="${f.key}">What does this mean?</button></small>` : ''}${issues.map(issueHtml).join('')}</div>`;
+        case 'bool': input = `<div class="seg yn" role="radiogroup">${[[true, 'Yes'], [false, 'No']].map(([o, l]) => `<button type="button" class="${v === o ? 'on' : ''}" data-set="${f.key}" data-v="${o}" ${dis}>${l}</button>`).join('')}</div>`; break;
+        case 'check': return `<div class="fld" data-f="${f.key}"><label class="chk"><input type="checkbox" data-key="${f.key}" ${v ? 'checked' : ''} ${dis}><span>${esc(f.label)}</span></label>${f.explain && S.app.editable ? `<button type="button" class="linkq" data-help="${f.key}">What does this mean?</button>` : ''}${issues.map(issueHtml).join('')}</div>`;
         case 'money': input = `<div class="money"><span>$</span><input id="${id}" type="text" inputmode="decimal" data-key="${f.key}" value="${v != null ? esc(Number(v).toLocaleString()) : ''}" ${dis}></div>`; break;
         case 'number': input = `<input id="${id}" type="number" inputmode="decimal" min="0" step="any" data-key="${f.key}" value="${v ?? ''}" ${dis}>`; break;
         case 'signature': input = `<div class="sig"><input id="${id}" type="text" data-key="${f.key}" value="${esc(v ?? '')}" placeholder="Your full name" autocomplete="name" ${dis}></div>${S.app.data.signed_at ? `<small>Signed electronically ${new Date(S.app.data.signed_at).toLocaleString()}</small>` : ''}`; break;
         case 'files': return filesHtml(f);
+        case 'address': input = `<div class="addr"><input id="${id}" type="text" data-key="${f.key}" data-addr="1" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || 'Start typing the street address')}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" ${dis}></div>`; break;
         default: input = `<input id="${id}" type="${f.type === 'email' ? 'email' : f.type === 'phone' ? 'tel' : 'text'}" data-key="${f.key}" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}" ${f.type === 'state' ? 'maxlength="2"' : ''} autocomplete="${{ email: 'email', phone: 'tel', zip: 'postal-code' }[f.type] || 'off'}" ${dis}>`;
       }
       const q = S.app.editable ? `<button type="button" class="qhelp" data-help="${f.key}" aria-label="What does ${esc(f.label)} mean?" title="What does this mean?">?</button>` : '';
       const labelTag = ['select', 'radio', 'multi', 'bool'].includes(f.type) ? `<div class="lbl">${esc(f.label)}${q}</div>` : `<div class="lbl"><label for="${id}">${esc(f.label)}</label>${q}</div>`;
-      return `<div class="fld ${span}" data-f="${f.key}">${labelTag}${input}${f.help ? `<small>${esc(f.help)}</small>` : ''}${issues.map(issueHtml).join('')}</div>`;
+      return `<div class="fld ${span}" data-f="${f.key}">${labelTag}${f.help ? `<div class="hint">${esc(f.help)}</div>` : ''}${input}${f.type === 'address' ? addrNote(v) : ''}${issues.map(issueHtml).join('')}</div>`;
+    }
+
+    // Under the address: what the map screen found, quietly, instead of chat messages.
+    function addrNote(v) {
+      const sc = S.app.screen;
+      if (!v || !sc || S.app.data[S.schema.addressField] !== v) return '';
+      if (sc.jurisdiction?.checked) return sc.jurisdiction.inCity ? `<small class="addr-ok">${icon('check', 12)} Found on the map, inside ${esc(o.cityName.replace(/^(City|Town|Village) of /i, ''))} city limits${sc.flood?.zone ? ` · flood zone ${esc(sc.flood.zone)}` : ''}</small>` : '';
+      return '<small>We couldn\'t place this exact address on the map. That\'s fine: City Hall will confirm it. Picking a suggestion while you type helps.</small>';
     }
 
     function filesHtml(f) {
       const files = S.app.files || [];
       const issues = issuesFor(['files']);
       return `<div class="fld" data-f="files"><div class="lbl">Attachments</div>
-        <div class="files">${files.map((x) => `<div class="file"><span class="k">${esc(kindLabel(x.kind))}</span><a href="#" data-open-file="${esc(x.id)}">${esc(x.name)}</a>
+        <div class="drop"><div class="files">${files.map((x) => `<div class="file"><span class="k">${esc(kindLabel(x.kind))}</span><a href="#" data-open-file="${esc(x.id)}">${esc(x.name)}</a>
           ${S.app.editable ? `<button data-del-file="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">${icon('x', 14)}</button>` : ''}</div>`).join('') || `<small>No attachments yet.${f.help ? ` ${esc(f.help)}` : ''} A phone photo is fine.</small>`}</div>
         ${S.app.editable ? `<div class="uprow"><select id="pKind" data-nokey>${f.kinds.map(([k, l]) => `<option value="${esc(k)}">${esc(l)}</option>`).join('')}</select>
-          <button class="btn" type="button" data-pact="upload">${icon('camera', 15)} Upload a PDF or photo</button></div>` : ''}
+          <button class="btn" type="button" data-pact="upload">${icon('camera', 15)} Upload a PDF or photo</button></div>` : ''}</div>
         ${issues.map(issueHtml).join('')}</div>`;
     }
 
+    const answered = (f) => {
+      const x = f.type === 'files' ? S.app.files.length : val(f.key);
+      return x != null && x !== '' && x !== false && x !== 0 && !(Array.isArray(x) && !x.length);
+    };
     function sectionDone(sec) {
-      const keys = sec.fields.filter(shown).map((f) => f.key);
+      const fields = sec.fields.filter(shown);
+      const keys = fields.map((f) => f.key);
       const errs = (S.app.checks || []).filter((i) => i.level === 'error' && keys.includes(i.field));
-      const filled = sec.fields.filter(shown).some((f) => f.type === 'files' ? S.app.files.length : val(f.key) != null && val(f.key) !== '');
-      return { done: filled && !errs.length, err: errs.length > 0 && filled && (S.showErrors || S.app.status === 'needs_info') };
+      const filled = fields.some(answered);
+      return { done: filled && !errs.length, err: errs.length > 0 && filled && (S.showErrors || S.app.status === 'needs_info'), n: fields.filter(answered).length, of: fields.length };
     }
 
-    function summaryHtml() {
-      const a = S.app;
-      const sc = a.screen;
+    // The property and the fee: cards in the rail on a wide screen, one summary box in the application otherwise.
+    function propertyHtml() {
+      const a = S.app; const sc = a.screen; const addr = S.schema.addressField;
+      if (!addr) return '';
       const badges = [];
       if (sc?.jurisdiction?.checked) badges.push(sc.jurisdiction.inCity ? `<span class="badge ok">${icon('check', 12)} Inside city limits</span>` : `<span class="badge bad">${icon('alert', 12)} Outside city limits?</span>`);
       if (sc?.flood?.checked && sc.flood.zone) badges.push(`<span class="badge ${sc.flood.sfha ? 'warn' : 'ok'}">Flood zone ${esc(sc.flood.zone)}</span>`);
+      return `<div class="eyebrow">Property</div><div class="v">${esc(sc?.matchedAddress || a.data[addr] || 'Address not given yet')}</div>
+        ${badges.length ? `<div class="badges">${badges.join('')}</div>` : ''}
+        ${sc?.jurisdiction?.checked || sc?.flood?.checked ? '<small>Screened with U.S. Census and FEMA maps. City Hall makes the official determinations.</small>' : ''}`;
+    }
+    function feeHtml() {
+      const a = S.app;
       const fee = a.fee_assessed != null ? { total: a.fee_assessed, assessed: true } : a.fee;
-      const addr = S.schema.addressField;
-      return `<div class="summary">
-        <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
-          ${addr ? `<div style="flex:1;min-width:200px"><div style="font-size:12px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.05em">Property</div>
-            <div style="font-weight:650;font-size:15px">${esc(sc?.matchedAddress || a.data[addr] || 'Address not given yet')}</div>
-            ${badges.length ? `<div class="badges" style="margin-top:6px">${badges.join('')}</div>` : ''}
-            ${sc?.jurisdiction?.checked || sc?.flood?.checked ? '<small style="display:block;margin-top:6px;color:var(--muted)">Screened automatically with U.S. Census and FEMA maps. City Hall makes the official determinations.</small>' : ''}</div>` : ''}
-          <div class="fee" style="min-width:170px"><div style="font-size:12px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.05em">${fee?.assessed ? 'Fee' : 'Estimated fee'}</div>
-            ${fee && !fee.total && !fee.assessed ? '<div class="tot">No fee</div>' : fee ? `<div class="tot">$${Number(fee.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>${fee.assessed ? (a.fee_paid != null ? '<small>Paid</small>' : '<small>Due</small>') : `<small>${esc(a.fee.lines?.[1]?.label?.startsWith('Doubled') ? 'Doubled: work already started. ' : '')}From the published fee schedule. City Hall confirms the final amount.</small>`}` : '<small>Shown once the application has what the fee is based on.</small>'}</div>
-        </div>
-        ${!fee?.assessed && a.fee?.notes?.length ? `<details><summary style="cursor:pointer;font-size:12.5px;color:var(--muted)">Other fees that may apply</summary><ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--muted)">${a.fee.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></details>` : ''}
-      </div>`;
+      const amount = fee && !fee.total && !fee.assessed ? 'No fee' : fee ? `$${Number(fee.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '';
+      const note = fee?.assessed ? (a.fee_paid != null ? 'Paid' : 'Due') : fee ? `${a.fee.lines?.[1]?.label?.startsWith('Doubled') ? 'Doubled: work already started. ' : ''}From the published fee schedule. City Hall confirms it.` : 'Shown once the application has what the fee is based on.';
+      return `<div class="eyebrow">${fee?.assessed ? 'Fee' : 'Estimated fee'}</div>${amount ? `<div class="big">${amount}</div>` : ''}<small>${esc(note)}</small>
+        ${!fee?.assessed && a.fee?.notes?.length ? `<details class="more"><summary>Other fees that may apply</summary><ul>${a.fee.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></details>` : ''}`;
+    }
+    function summaryHtml() {
+      const prop = propertyHtml();
+      return `<div class="sum-inline"><div class="summary" style="grid-template-columns:${prop ? 'minmax(0,1.4fr) minmax(0,1fr)' : '1fr'}">${prop ? `<div style="display:grid;gap:3px;align-content:start">${prop}</div>` : ''}<div style="display:grid;gap:3px;align-content:start">${feeHtml()}</div></div></div>`;
+    }
+
+    // The rail beside the application on a wide screen: overall progress, the sections, the property and the fee.
+    function drawRail() {
+      const el = $('#pRail'); if (!el) return;
+      const a = S.app; const secs = S.schema.sections;
+      const st = secs.map(sectionDone);
+      const done = st.filter((x) => x.done).length;
+      const pct = a.editable ? a.progress : 100;
+      const prop = propertyHtml();
+      el.innerHTML = `
+        <div class="rail-prog"><div class="ring" style="--p:${pct}"><span>${pct}%</span></div>
+          <div><b>${a.editable ? `${done} of ${secs.length} sections` : esc((STATUS[a.status] || [a.status])[0])}</b><small>${a.editable ? 'Answers save as you go' : a.ref ? esc(a.ref) : ''}</small></div></div>
+        <nav class="rail-nav"><div class="eyebrow">Sections</div>
+          ${secs.map((s, i) => `<button class="rn ${st[i].done ? 'done' : ''} ${st[i].err ? 'err' : ''}" data-jump="${s.id}"><b>${st[i].done ? icon('check', 13) : i + 1}</b><span>${esc(s.title)}</span><small>${st[i].n}/${st[i].of}</small></button>`).join('')}
+          ${a.editable ? `<button class="rn" data-jump="final"><b>${icon('send', 12)}</b><span>${a.status === 'needs_info' ? 'Resubmit' : 'Check & submit'}</span><small></small></button>` : ''}
+        </nav>
+        ${prop ? `<div class="rail-card">${prop}</div>` : ''}
+        <div class="rail-card">${feeHtml()}</div>
+        <div class="rail-help">Questions? Ask the assistant${o.phone ? `, or call City Hall at <a href="tel:${esc(o.phone.replace(/[^\d+]/g, ''))}">${esc(o.phone)}</a>` : ''}.</div>`;
+    }
+
+    // On a phone, under the application: how far along it is and a way back to the chat.
+    function drawDock() {
+      const el = $('#pDock'); if (!el) return;
+      const a = S.app;
+      el.innerHTML = a.editable ? `<div class="dp"><span><b>${a.progress}%</b> complete</span><div class="mini"><i style="width:${a.progress}%"></i></div></div>
+        <button class="btn primary" data-tab="chat">${icon('chat', 16)} Continue in chat</button>` : '';
+    }
+
+    // Highlights the section being read, in the rail and in the section chips.
+    function spy() {
+      const wrap = $('#pSheetWrap'); if (!wrap || !S.schema || !S.app) return;
+      const top = wrap.getBoundingClientRect().top + 90;
+      let cur = S.schema.sections[0]?.id;
+      for (const s of S.schema.sections) { const n = $(`#sec-${s.id}`); if (n && n.getBoundingClientRect().top <= top) cur = s.id; }
+      const fin = $('#sec-final');
+      if (fin && (fin.getBoundingClientRect().top <= top || wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 8)) cur = 'final';
+      root.querySelectorAll('.rn[data-jump], .step[data-jump]').forEach((b) => b.classList.toggle('on', b.dataset.jump === cur));
+      const chip = $('.steps .step.on'); const bar = chip?.parentNode;
+      if (chip && (chip.offsetLeft < bar.scrollLeft || chip.offsetLeft + chip.offsetWidth > bar.scrollLeft + bar.clientWidth)) bar.scrollTo({ left: chip.offsetLeft - 12, behavior: 'smooth' });
     }
 
     function statusHtml() {
@@ -426,7 +637,7 @@
       const errs = (a.checks || []).filter((i) => i.level === 'error');
       const aiErr = (a.review?.issues || []).filter((i) => i.level === 'error');
       const reviewed = a.review && !a.review.stale;
-      return `<div class="final" id="pFinal">
+      return `<div class="final" id="sec-final">
         <div class="sec-h"><span class="n">${icon('check', 14)}</span><h2>${a.status === 'needs_info' ? 'Resubmit' : 'Check & submit'}</h2></div>
         ${errs.length ? `<div class="issues-box"><h3>${errs.length} thing${errs.length === 1 ? '' : 's'} still needed</h3>${errs.map((i) => `<div class="issue error">${icon('alert', 13)}<span>${esc(i.message)} ${i.field ? `<button class="go" data-go="${esc(i.field)}">Go to it</button>` : ''}</span></div>`).join('')}</div>`
           : '<div class="issue info" style="font-size:13.5px;color:#0f7a55">' + icon('check', 14) + '<span>All required answers are in.</span></div>'}
@@ -447,17 +658,28 @@
       const key = active?.dataset?.key; let sel = null;
       try { sel = key ? [active.selectionStart, active.selectionEnd] : null; } catch { sel = null; }
       const secs = S.schema.sections;
+      S.drawing = true;
+      const st = secs.map(sectionDone);
       el.innerHTML = `
-        <div><h1>${esc(val('project_name') || S.schema.title)}</h1><p class="lede">${esc(o.cityName)} · ${esc(S.schema.department)}${S.app.editable ? ' · Answer in the chat, or fill in anything here directly. Tap ? to ask what something means.' : ''}</p></div>
+        <div class="page-h"><div class="eyebrow">${esc(o.cityName)} · ${esc(S.schema.department)}</div><h1>${esc(val('project_name') || S.schema.title)}</h1></div>
+        ${S.app.editable ? '<div class="tip"><span class="qhelp">?</span><span>Answer in the chat or type here. Tap <b>?</b> next to any question to ask what it means.</span></div>' : ''}
         ${statusHtml()}
         ${summaryHtml()}
-        ${S.app.editable ? `<nav class="steps">${secs.map((s, i) => { const st = sectionDone(s); return `<button class="step ${st.done ? 'done' : ''} ${st.err ? 'err' : ''}" data-jump="${s.id}"><b>${st.done ? '✓' : i + 1}</b>${esc(s.title)}</button>`; }).join('')}</nav>` : ''}
-        ${secs.map((s, i) => { const st = sectionDone(s); return `<section class="sec ${st.done ? 'done' : ''}" id="sec-${s.id}"><div class="sec-h"><span class="n">${st.done ? '✓' : i + 1}</span><h2>${esc(s.title)}</h2></div><div class="grid">${s.fields.filter(shown).map(fieldHtml).join('')}</div></section>`; }).join('')}
+        ${S.app.editable ? `<nav class="steps">${secs.map((s, i) => `<button class="step ${st[i].done ? 'done' : ''} ${st[i].err ? 'err' : ''}" data-jump="${s.id}"><b>${st[i].done ? '✓' : i + 1}</b>${esc(s.title)}</button>`).join('')}</nav>` : ''}
+        ${secs.map((s, i) => `<section class="sec ${st[i].done ? 'done' : ''}" id="sec-${s.id}"><div class="sec-h"><span class="n">${st[i].done ? icon('check', 14) : i + 1}</span><h2>${esc(s.title)}</h2><span class="cnt">${st[i].n} of ${st[i].of}</span></div><div class="grid">${s.fields.filter(shown).map(fieldHtml).join('')}</div></section>`).join('')}
         ${finalHtml()}`;
+      drawRail(); drawDock();
       if (key) {
         const n = el.querySelector(`[data-key="${key}"]`);
         if (n) { n.focus({ preventScroll: true }); if (sel) try { n.setSelectionRange(...sel); } catch { /* not a text input */ } }
       }
+      S.drawing = false;
+      // Keep the address suggestions open across a redraw while the resident is still typing.
+      if (A.el && A.input && !A.input.isConnected) {
+        const n = el.querySelector('[data-addr]');
+        if (n && shadow.activeElement === n) { A.input = n; addrDraw(); } else addrClose();
+      }
+      spy();
       const flash = flashKeys.map((k) => el.querySelector(`[data-f="${k}"]`)).filter(Boolean);
       if (flash.length) {
         flash.forEach((n) => n.classList.add('flash'));
@@ -481,17 +703,37 @@
       const keys = Object.keys(S.pending);
       if (!keys.length) return;
       const sent = { ...S.pending };
+      const addr = !!S.schema.addressField && S.schema.addressField in sent;
+      const place = addr ? S.place : null;
+      if (addr) S.place = null;
       try {
-        const v = await call(`/${S.id}`, { method: 'PATCH', body: { data: sent } });
+        const v = await call(`/${S.id}`, { method: 'PATCH', body: { data: sent, ...(place ? { place } : {}) } });
         for (const k of keys) if (S.pending[k] === sent[k]) delete S.pending[k];
-        const addr = 'job_address' in sent;
+        const last = S.msgs[S.msgs.length - 1];
         setApp(v);
-        if (addr && v.screenNote) say(v.screenNote);
-        if (v.ask) syncAsk(v.ask);
+        if (addr && v.screenNote) {
+          const moving = v.ask && last?.role === 'bot' && last.ask && last.ask !== v.ask.id;
+          sayScreen(v.screenNote, !moving);
+          if (moving) askMsg(v.ask);
+        } else {
+          // A new address the map couldn't place: the old "I found …" message no longer applies.
+          if (addr && S.msgs.some((m) => m.screen)) { S.msgs = S.msgs.filter((m) => !m.screen); saveMsgs(); drawChat(); }
+          if (v.ask) syncAsk(v.ask);
+        }
       } catch (err) {
         say(`I couldn't save that: ${err.message}`);
       }
       S.saving = Object.keys(S.pending).length > 0; S.savedAt = Date.now(); drawHead();
+    }
+
+    // One map-screen message at a time: a corrected address replaces the earlier one instead of piling up.
+    // beforeAsk: the address was changed in the form while the chat waits on another question, so the note goes
+    // above that question and its answer buttons stay live.
+    function sayScreen(text, beforeAsk = false) {
+      S.msgs = S.msgs.filter((m) => !m.screen);
+      const last = S.msgs[S.msgs.length - 1];
+      if (beforeAsk && last?.role === 'bot' && last.ask) { S.msgs.splice(-1, 0, { role: 'bot', text, screen: true }); saveMsgs(); drawChat(); }
+      else say(text, { screen: true });
     }
 
     // When a form edit answers the question the chat is waiting on, move the chat along too.
@@ -500,9 +742,106 @@
       if (last?.role === 'bot' && last.ask && last.ask !== a.id) { say('Thanks, I see that in the form.'); askMsg(a); }
     }
 
+    /* ---------------- Address suggestions ---------------- */
+
+    // Suggestions while the resident types the property address, in the form or in the chat, centered on City Hall.
+    // A picked address is saved with its map location; typed text is saved when they leave the field, so a
+    // half-typed address is never saved or screened.
+    const A = { el: null, input: null, items: [], on: -1, seq: 0, timer: 0, session: null, onPick: null, note: null, provider: null };
+    const newSession = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}${Math.random()}`.replace('.', ''));
+
+    function addrSuggest(input, onPick) {
+      A.input = input; A.onPick = onPick; A.note = null;
+      clearTimeout(A.timer);
+      const q = input.value.trim();
+      if (q.length < 3) { addrClose(); return; }
+      A.timer = setTimeout(async () => {
+        const seq = ++A.seq;
+        A.session ||= newSession();
+        try {
+          const res = await fetch(`${api}/permits/address?${new URLSearchParams({ q, session: A.session })}`);
+          const d = await res.json();
+          if (seq !== A.seq || A.input !== input) return;
+          A.items = d.suggestions || []; A.on = -1; A.provider = d.provider;
+          addrDraw();
+        } catch { /* typing still works without suggestions */ }
+      }, 180);
+    }
+
+    function addrDraw() {
+      const input = A.input;
+      const host = input?.isConnected && input.closest('.addr, .composer');
+      if (!host) { addrClose(); return; }
+      if (!A.el || A.el.parentNode !== host) {
+        A.el?.remove();
+        A.el = document.createElement('div'); A.el.className = 'addr-sug'; A.el.setAttribute('role', 'listbox');
+        A.el.addEventListener('mousedown', (e) => e.preventDefault());
+        A.el.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (b) addrPick(A.items[+b.dataset.i]); });
+        host.appendChild(A.el);
+      }
+      const typedNumber = /^\s*\d/.test(input.value);
+      const note = A.note || (!A.items.length
+        ? (typedNumber ? 'Keep typing the street name. Or just finish the address and press Enter.' : 'Start with the house number, like 113 First St N.')
+        : A.provider === 'google' ? 'Powered by Google' : "Don't see it? Finish typing it and press Enter.");
+      A.el.innerHTML = `${A.items.map((s, i) => `<button type="button" role="option" data-i="${i}" class="${i === A.on ? 'on' : ''}" aria-selected="${i === A.on}">${icon('pin', 15)}<span>${esc(s.main)}<small>${esc(s.secondary || '')}${s.needsNumber ? ' · add the house number' : ''}${s.miles != null ? ` · ${s.miles} mi` : ''}</small></span></button>`).join('')}<div class="note">${esc(note)}</div>`;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function addrClose() {
+      clearTimeout(A.timer); A.seq++;
+      A.el?.remove(); A.el = null; A.items = []; A.on = -1;
+      A.input?.setAttribute?.('aria-expanded', 'false');
+    }
+
+    // Arrow keys, Enter and Escape in the suggestion list. Returns true when the key was used.
+    function addrKey(e) {
+      if (!A.el || !A.items.length) { if (e.key === 'Escape' && A.el) { addrClose(); return true; } return false; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        A.on = (A.on + (e.key === 'ArrowDown' ? 1 : -1) + A.items.length + 1) % (A.items.length + 1);
+        if (A.on === A.items.length) A.on = -1;
+        addrDraw(); return true;
+      }
+      if (e.key === 'Enter' && A.on >= 0) { e.preventDefault(); addrPick(A.items[A.on]); return true; }
+      if (e.key === 'Escape') { addrClose(); return true; }
+      return false;
+    }
+
+    function addrPick(s) {
+      if (!s) return;
+      const input = A.input;
+      if (s.needsNumber) {
+        // A street without a house number: put it in and let them add the number in front.
+        input.value = s.text; input.focus(); input.setSelectionRange(0, 0);
+        if (input.dataset.key) S.typed[input.dataset.key] = s.text;
+        A.items = []; A.note = 'Now type the house number at the start.'; addrDraw();
+        return;
+      }
+      const place = s.placeId ? { placeId: s.placeId, session: A.session } : s.lat != null ? { lat: s.lat, lon: s.lon } : null;
+      A.session = null;
+      const done = A.onPick;
+      addrClose();
+      done?.(s.text, place);
+    }
+
+    // Saves what's in the sheet's address field when the resident leaves it or presses Enter.
+    function addrCommit(input) {
+      const k = input.dataset.key;
+      if (!(k in S.typed)) return;
+      const v = input.value.trim();
+      delete S.typed[k];
+      if (v !== (S.app.data[k] || '')) { S.place = null; edit(k, v || null); }
+      flush();
+    }
+
     function onFieldInput(e) {
       const k = e.target.dataset.key; if (!k) return;
       if (e.target.type === 'checkbox') return;
+      if (e.target.dataset.addr) {
+        S.typed[k] = e.target.value;
+        addrSuggest(e.target, (text, place) => { delete S.typed[k]; e.target.value = text; S.place = place; edit(k, text); flush(); });
+        return;
+      }
       let v = e.target.value;
       if (e.target.closest('.money')) v = v.replace(/[^\d.]/g, '');
       edit(k, v);
@@ -529,7 +868,7 @@
       const help = e.target.closest('[data-help]');
       if (help) { e.preventDefault(); askAbout(help.dataset.help); return; }
       const jump = e.target.closest('[data-jump]');
-      if (jump) { $(`#sec-${jump.dataset.jump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+      if (jump) { setTab('form'); $(`#sec-${jump.dataset.jump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
       const go = e.target.closest('[data-go]');
       if (go) { const n = $(`[data-f="${go.dataset.go}"]`); if (n) { n.scrollIntoView({ behavior: 'smooth', block: 'center' }); n.querySelector('input, textarea, button')?.focus({ preventScroll: true }); } return; }
       const of = e.target.closest('[data-open-file]');
@@ -634,7 +973,7 @@
         say(`**Submitted.** Your reference number is **${v.ref}**.${next.length ? `\n\nWhat happens next:\n${next.map((x) => `- ${x}`).join('\n')}` : ''}${S.schema.notary ? '\n\n**Next for you:** tap **Print**, sign the signature page in front of a notary, then bring it to City Hall or upload a photo of it here.' : ''}\n\nWe'll contact you by ${({ email: 'email', sms: 'text message', call: 'phone' })[v.data.contact_pref] || 'email'} at each step. You can also type **${v.ref}** in the chat any time to check the status.`);
         watch();
       } catch (err) {
-        if (err.data?.checks) { setApp({ ...S.app, checks: err.data.checks }); say(`${err.message} They're marked in red on the right.`); } else say(err.message);
+        if (err.data?.checks) { setApp({ ...S.app, checks: err.data.checks }); say(`${err.message} They're marked in red in the form.`); } else say(err.message);
       }
       S.busy = false; drawSheet(); drawChat();
     }
@@ -650,7 +989,7 @@
           if (v.status !== S.app.status) {
             clearInterval(S.poll);
             setApp(v);
-            if (v.status === 'needs_info') say(`The automated completeness check found ${v.corrections?.items?.length || 'a few'} thing${v.corrections?.items?.length === 1 ? '' : 's'} to fix before staff review:\n${(v.corrections?.items || []).map((x) => `- ${x}`).join('\n')}\n\nYour answers are saved. Fix these on the right, then tap **Resubmit**.`);
+            if (v.status === 'needs_info') say(`The automated completeness check found ${v.corrections?.items?.length || 'a few'} thing${v.corrections?.items?.length === 1 ? '' : 's'} to fix before staff review:\n${(v.corrections?.items || []).map((x) => `- ${x}`).join('\n')}\n\nYour answers are saved. Fix these in the form, then tap **Resubmit**.`);
           }
         } catch { /* try again */ }
       }, 4000);
@@ -761,24 +1100,25 @@
         S.app = v; remember();
         drawHead(); drawSheet(v.changed || Object.keys(v.data));
         const wide = innerWidth > 900;
-        say(`I'll help you fill out the **${S.schema.title.toLowerCase()}** for the ${o.cityName.replace(/^the /i, '')}.${S.schema.intro ? ` ${S.schema.intro}` : ''}\n\nI'll ask one thing at a time and fill in the city's form ${wide ? 'on the right' : 'on the Application tab'} as we go. If anything is confusing, just ask, like "what does this mean?" or "where do I find that?"${v.reused ? `\n\nI reused your contact details from **${esc(v.reused)}**. Change anything that's different.` : ''}${o.account?.signedIn() ? `\n\nYou're signed in, so this is saved to your account as you go.` : ''}\n\nNothing is sent to City Hall until you tap **Submit**.`);
+        say(`I'll help you fill out the **${S.schema.title.toLowerCase()}** for the ${o.cityName.replace(/^the /i, '')}.${S.schema.intro ? ` ${S.schema.intro}` : ''}\n\nI'll ask one thing at a time and fill in the city's form ${wide ? 'beside this chat' : 'on the Application tab'} as we go. If anything is confusing, just ask, like "what does this mean?" or "where do I find that?"${v.reused ? `\n\nI reused your contact details from **${esc(v.reused)}**. Change anything that's different.` : ''}${o.account?.signedIn() ? `\n\nYou're signed in, so this is saved to your account as you go.` : ''}\n\nNothing is sent to City Hall until you tap **Submit**.`);
         if (v.reply) say(v.reply);
         askMsg(v.ask);
       } else {
         const v = await call(`/${S.id}`);
         await loadSchema(v.kind || 'construction');
         S.app = v; remember();
-        S.msgs = local.get(`${S.id}:msgs`) || [];
+        // Earlier versions posted a map note for every keystroke in the address; keep none of those.
+        S.msgs = (local.get(`${S.id}:msgs`) || []).filter((m) => !/^I couldn't match that address on federal maps/.test(m.text || ''));
         drawHead(); drawSheet();
         if (!S.msgs.length || o.fresh) {
           if (v.status === 'draft') { say(`Welcome back to your **${S.schema.short.toLowerCase()}** application. It's **${v.progress}%** complete, and everything you entered is saved.`); askMsg(v.ask); }
-          else if (v.status === 'needs_info') { say(`City Hall asked for a few changes to **${v.ref}**:\n${(v.corrections?.items || []).map((x) => `- ${x}`).join('\n')}\n\nYour answers are saved. Fix these on the right, then tap **Resubmit**.`); }
+          else if (v.status === 'needs_info') { say(`City Hall asked for a few changes to **${v.ref}**:\n${(v.corrections?.items || []).map((x) => `- ${x}`).join('\n')}\n\nYour answers are saved. Fix these in the form, then tap **Resubmit**.`); }
           else say(`Here's the latest on **${v.ref}**: ${STATUS[v.status]?.[0] || v.status}. ${STATUS[v.status]?.[1] || ''}.`);
         } else if (local.get(`${S.id}:seen`) && local.get(`${S.id}:seen`) !== v.status) {
           // City Hall acted since the last visit: say what changed before anything else.
           const [label, sub] = STATUS[v.status] || [v.status, ''];
           say(v.status === 'issued' ? `Good news: your ${esc(S.schema.short.toLowerCase())} was ${S.schema.issue.noun === 'approval' ? 'approved' : 'issued'} (**${v.permit_number}**). Download it on the Application tab.${S.schema.issue.post ? ' Print it and post it where it can be seen.' : ''}`
-            : v.status === 'needs_info' ? `City Hall asked for a few changes to **${v.ref}**:\n${(v.corrections?.items || []).map((x) => `- ${x}`).join('\n')}\n\nFix these on the right, then tap **Resubmit**.`
+            : v.status === 'needs_info' ? `City Hall asked for a few changes to **${v.ref}**:\n${(v.corrections?.items || []).map((x) => `- ${x}`).join('\n')}\n\nFix these in the form, then tap **Resubmit**.`
               : v.status === 'fees_due' ? `**${v.ref}** is complete. The fee is **$${Number(v.fee_assessed).toFixed(2)}**. ${v.payment || ''}`
                 : `Update on **${v.ref}**: ${label}. ${sub}.`);
         } else drawChat();
