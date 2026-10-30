@@ -7,6 +7,7 @@ import { chunkText, extractText, guessMime } from './ingest.js';
 import { search } from './search.js';
 import { buildUserMessage, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
+import { recordsIntro, recordsPublic, recordsStaff, wantsRecords } from './records.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
@@ -139,6 +140,7 @@ async function route(request, env, ctx, url) {
     if (res === 'track' && m === 'GET' && id) return trackRequest(store, id);
     if (res === 'forms' && m === 'GET') return listForms(city, store);
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
+    if (res === 'records') { const out = await recordsPublic(request, env, ctx, city, store, me, parts, url); if (out) return out; }
   }
 
   // Staff only. Each route names the permission it needs.
@@ -165,6 +167,7 @@ async function route(request, env, ctx, url) {
     if (id && sub === 'photo' && m === 'GET') { need('requests.view'); return requestPhoto(env, store, id, me); }
     if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, store, id, me); }
   }
+  if (res === 'records') return recordsStaff(request, env, ctx, city, store, me, need, parts, url);
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
   if (res === 'staff') {
     if (!id && m === 'GET') { need('requests.view'); return listStaff(env, city, store, me); }
@@ -193,6 +196,7 @@ async function publicConfig(city, store) {
     city: city.slug, cityName: s.cityName, assistantName: s.assistantName, tagline: s.tagline, greeting: s.greeting,
     brandColor: s.brandColor, suggestions: s.suggestions, phone: s.phone, policeNonEmergency: s.policeNonEmergency,
     requestTypes: (await store.requestTypes()).map(({ key, label }) => ({ key, label })),
+    modules: ['records'], // chat add-ons the widget loads: /embed-{name}.js
   }, 200, { 'Cache-Control': 'public, max-age=60' });
 }
 
@@ -371,12 +375,17 @@ async function chat(request, env, ctx, city, store, me) {
   const run = async () => {
     let answer = '';
     let sources = [];
-    let flags = { needsStaff: false, offerReport: false, emergency: false };
+    let flags = { needsStaff: false, offerReport: false, emergency: false, offerRecords: false };
     let reportType = null;
     try {
       const emergency = isEmergency(question);
-      const type = emergency ? null : (await store.requestTypes()).find((t) => t.key === detectReport(question));
-      if (type) {
+      flags.offerRecords = !emergency && wantsRecords(question);
+      const type = emergency || flags.offerRecords ? null : (await store.requestTypes()).find((t) => t.key === detectReport(question));
+      if (flags.offerRecords) {
+        answer = recordsIntro(s);
+        await send('meta', { convoId, sources: [] });
+        await send('delta', { t: answer });
+      } else if (type) {
         reportType = type.key;
         flags.offerReport = true;
         answer = `Thanks for letting us know. I can send this straight to **${type.department}** as a "${type.label.toLowerCase()}" request. ` +
@@ -438,7 +447,7 @@ async function chat(request, env, ctx, city, store, me) {
       convoId, answer,
       sources: (used.length ? used : sources.slice(0, 3)).map(({ score, excerpt, ...x }) => x),
       flag: flags.emergency ? 'emergency' : flags.needsStaff ? 'needs_staff' : flags.offerReport ? 'report' : null,
-      model: flags.emergency || reportType ? 'rule' : modelName(env),
+      model: flags.emergency || reportType || flags.offerRecords ? 'rule' : modelName(env),
       status: flags.emergency ? 'emergency' : flags.needsStaff ? 'needs_review' : null,
       citedDocIds: used.filter((u) => u.docId).map((u) => u.docId),
     });

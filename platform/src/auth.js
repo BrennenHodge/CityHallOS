@@ -1,6 +1,9 @@
 // Staff sign-in, sessions and roles.
 import { DurableObject } from 'cloudflare:workers';
 
+// Public records requests (records.js): records.view sees the queue and the log; records.manage works requests and
+// releases records. Knowledge editors are usually the City Clerk's office, the records custodian, so they get both.
+// Viewers see the queue without requester contact details. Department staff don't see records requests.
 export const ROLES = {
   admin: {
     label: 'Administrator',
@@ -9,9 +12,9 @@ export const ROLES = {
   },
   editor: {
     label: 'Knowledge editor',
-    description: 'Manages the knowledge base and reviews conversations',
+    description: 'Manages the knowledge base, reviews conversations and handles public records requests',
     perms: ['overview', 'knowledge.view', 'knowledge.edit', 'assistant.test', 'conversations.view', 'conversations.review',
-      'requests.view', 'channels.view', 'audit.view'],
+      'requests.view', 'channels.view', 'audit.view', 'records.view', 'records.manage'],
   },
   department: {
     label: 'Department staff',
@@ -22,7 +25,7 @@ export const ROLES = {
   viewer: {
     label: 'Viewer',
     description: 'Can see the dashboard but not change anything',
-    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'channels.view'],
+    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'channels.view', 'records.view'],
   },
 };
 

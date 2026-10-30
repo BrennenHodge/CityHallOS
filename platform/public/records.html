@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Public Records Request</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
+  <style>
+    :root { --brand: #1f5c46; --ink: #0f172a; --muted: #5b6474; --line: #e3e7ee; --soft: #f4f6f9; --paper: #fafbfc; --red: #b42318; --amber: #a15c07; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.55 Inter, system-ui, sans-serif; color: var(--ink); background: var(--paper); }
+    header { background: var(--brand); color: #fff; padding: 22px 16px; }
+    header .in, main { max-width: 760px; margin: 0 auto; }
+    header h1 { margin: 0; font-size: 22px; }
+    header p { margin: 4px 0 0; opacity: .85; font-size: 14px; }
+    main { padding: 20px 16px 60px; display: grid; gap: 16px; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 12px; }
+    h2 { margin: 0; font-size: 17px; }
+    h3 { margin: 0; font-size: 15px; }
+    .muted { color: var(--muted); font-size: 13.5px; }
+    .ref { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 20px; font-weight: 600; letter-spacing: .02em; }
+    .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+    .steps div { font-size: 12px; color: var(--muted); }
+    .steps i { display: block; height: 6px; border-radius: 99px; background: var(--soft); margin-bottom: 6px; }
+    .steps .on i { background: var(--brand); }
+    .steps .on { color: var(--ink); font-weight: 600; }
+    .rows { display: grid; gap: 6px; }
+    .row { display: grid; grid-template-columns: 140px 1fr; gap: 8px; font-size: 14px; }
+    .row b { color: var(--muted); font-weight: 600; }
+    .tl { display: grid; gap: 10px; border-left: 2px solid var(--line); padding-left: 14px; }
+    .tl div small { display: block; color: var(--muted); font-size: 12.5px; }
+    .letter { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: var(--paper); }
+    .letter pre { white-space: pre-wrap; font: inherit; margin: 8px 0 0; }
+    .file { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; text-decoration: none; color: var(--ink); }
+    .file:hover { border-color: var(--brand); }
+    .file span { margin-left: auto; color: var(--muted); font-size: 13px; }
+    label { display: grid; gap: 4px; font-size: 13.5px; font-weight: 600; }
+    input, textarea, select { font: inherit; padding: 9px 11px; border: 1px solid #cfd6e0; border-radius: 10px; background: #fff; width: 100%; }
+    textarea { resize: vertical; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font: inherit; font-weight: 600; cursor: pointer; color: var(--ink); text-decoration: none; }
+    .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .btn:disabled { opacity: .6; cursor: default; }
+    .note { padding: 12px 14px; border-radius: 12px; background: #fff7e6; border: 1px solid #f1d9a6; font-size: 14px; }
+    .note.ok { background: #ecf8f1; border-color: #bfe3cf; }
+    .err { color: var(--red); font-size: 14px; min-height: 1em; }
+    .inline { display: flex; gap: 8px; }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; gap: 0; } }
+  </style>
+</head>
+<body>
+  <header><div class="in"><h1 id="title">Public records request</h1><p id="sub">Request and track public records</p></div></header>
+  <main id="main"><div class="card"><div class="muted">Loading…</div></div></main>
+  <script>
+  (() => {
+    const q = new URLSearchParams(location.search);
+    const CITY = (q.get('city') || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
+    const API = `/api/${CITY}`;
+    const main = document.getElementById('main');
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const day = (d) => (d ? new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : '');
+    const money = (c) => `$${(Number(c || 0) / 100).toFixed(2)}`;
+    const size = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
+    const STEPS = [['new', 'Received'], ['acknowledged', 'Acknowledged'], ['in_progress', 'Gathering records'], ['closed', 'Complete']];
+    const STATUS = { new: 'Received', acknowledged: 'Acknowledged', in_progress: 'Gathering records', awaiting_payment: 'Waiting for payment', ready: 'Ready to release', closed: 'Complete' };
+    const OUTCOME = { fulfilled: 'Records released', partial: 'Records released in part', denied: 'Request denied', no_records: 'No responsive records found', withdrawn: 'Withdrawn' };
+    const FORMATS = { electronic: 'Electronic copies', paper: 'Paper copies', inspection: 'Inspect at City Hall' };
+    let cfg = {};
+
+    async function boot() {
+      if (!CITY) { main.innerHTML = '<div class="card"><h2>Which city?</h2><p class="muted">This link is missing the city. Use the link from your city\'s website.</p></div>'; return; }
+      cfg = await fetch(`${API}/config`).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+      if (!cfg.cityName) { main.innerHTML = '<div class="card"><h2>City not found</h2></div>'; return; }
+      document.documentElement.style.setProperty('--brand', cfg.brandColor || '#1f5c46');
+      document.getElementById('title').textContent = `${cfg.cityName}: public records`;
+      document.title = `Public Records | ${cfg.cityName}`;
+      const ref = q.get('ref');
+      if (ref) return showRequest(ref.toUpperCase(), q.get('key'));
+      showForms();
+    }
+
+    async function showRequest(ref, key) {
+      const res = await fetch(`${API}/records/track/${encodeURIComponent(ref)}${key ? `?key=${encodeURIComponent(key)}` : ''}`);
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok) { main.innerHTML = `<div class="card"><h2>We couldn't find ${esc(ref)}</h2><p class="muted">Check the number, or call ${esc(cfg.cityName)} at ${esc(cfg.phone || 'City Hall')}.</p><a class="btn" href="?city=${CITY}">Back</a></div>`; return; }
+      const at = r.status === 'closed' ? 3 : ['in_progress', 'awaiting_payment', 'ready'].includes(r.status) ? 2 : r.status === 'acknowledged' ? 1 : 0;
+      const due = r.extended_due || r.due_date;
+      main.innerHTML = `
+        ${q.get('new') ? '<div class="note ok"><b>Request submitted.</b> Bookmark this page or keep its link: it is how you see letters from the city and download your records.</div>' : ''}
+        <div class="card">
+          <div class="muted">Public records request</div><div class="ref">${esc(r.ref)}</div>
+          <h2>${esc(r.outcome ? OUTCOME[r.outcome] : STATUS[r.status])}</h2>
+          <div class="steps">${STEPS.map(([, l], i) => `<div class="${i <= at ? 'on' : ''}"><i></i>${l}</div>`).join('')}</div>
+          <div class="rows">
+            <div class="row"><b>Received</b><span>${esc(day(r.received_at))}</span></div>
+            ${r.closed_at ? `<div class="row"><b>Completed</b><span>${esc(day(r.closed_at))}</span></div>` : `<div class="row"><b>Response due</b><span>${esc(day(due))}${r.extended_due ? ' (extended)' : ''}</span></div>`}
+            ${r.verified ? `<div class="row"><b>Records requested</b><span>${esc(r.records)}</span></div>
+              ${r.date_from || r.date_to ? `<div class="row"><b>Dates</b><span>${esc(r.date_from || 'any')} to ${esc(r.date_to || 'present')}</span></div>` : ''}
+              <div class="row"><b>Format</b><span>${esc(FORMATS[r.format])}</span></div>
+              ${r.fee && r.fee.status !== 'none' ? `<div class="row"><b>Fee</b><span>${r.fee.status === 'waived' ? 'Waived' : `${money(r.fee.cents)}${r.fee.status === 'paid' ? ' (paid)' : r.fee.status === 'requested' ? ' (payment needed before release)' : ''}`}</span></div>` : ''}` : ''}
+          </div>
+          ${r.status === 'awaiting_payment' && r.verified ? `<div class="note">The city sent a fee estimate below. Contact ${esc(r.custodian)}${r.phone ? ` at ${esc(r.phone)}` : ''} to pay or to narrow the request.</div>` : ''}
+          ${!r.verified ? '<p class="muted">Letters and released records are shown with the private link you received when you made the request.</p>' : ''}
+        </div>
+        ${r.verified && r.files.length ? `<div class="card"><h2>Your records</h2>${r.files.map((f) => `<a class="file" href="${API}/records/download/${encodeURIComponent(r.ref)}/${f.id}?key=${encodeURIComponent(key)}">${esc(f.name)}<span>${size(f.bytes)} · Download</span></a>`).join('')}</div>` : ''}
+        ${r.verified && r.exemptions.length ? `<div class="card"><h2>Withheld records</h2><p>Some records were withheld under: ${esc(r.exemptions.join('; '))}.</p>${r.denial_reason ? `<p class="muted">${esc(r.denial_reason)}</p>` : ''}</div>` : ''}
+        ${r.verified && r.letters.length ? `<div class="card"><h2>Letters from the city</h2>${r.letters.slice().reverse().map((l) => `<div class="letter"><h3>${esc(l.subject)}</h3><div class="muted">${esc(day(l.sent_at))}</div><pre>${esc(l.body)}</pre></div>`).join('')}</div>` : ''}
+        <div class="card"><h2>Updates</h2><div class="tl">${r.updates.slice().reverse().map((u) => `<div>${esc(u.note)}<small>${esc(new Date(u.at).toLocaleString())}</small></div>`).join('')}</div></div>
+        <p class="muted">Questions? Call ${esc(r.city)} at ${esc(r.phone || cfg.phone || 'City Hall')} and give your request number.</p>`;
+    }
+
+    function showForms() {
+      main.innerHTML = `
+        <div class="card"><h2>Track a request</h2>
+          <form class="inline" id="trackForm"><input id="tRef" placeholder="Your request number" required aria-label="Request number"><button class="btn" type="submit">Track</button></form></div>
+        <form class="card" id="reqForm">
+          <h2>Request public records</h2>
+          <p class="muted" style="margin:0">Describe the records you want as specifically as you can. The city may charge its actual cost of searching, reviewing and copying, and will tell you the amount first.</p>
+          <label>Records you want<textarea id="fRecords" rows="4" required placeholder="e.g. Minutes of the Board of Aldermen meetings where the water system was discussed"></textarea></label>
+          <div id="scope"></div>
+          <div class="grid">
+            <label>From date (optional)<input id="fFrom" type="date"></label>
+            <label>To date (optional)<input id="fTo" type="date"></label>
+            <label>Format<select id="fFormat">${Object.entries(FORMATS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+            <label>Organization (optional)<input id="fOrg"></label>
+            <label>Your name<input id="fName" required autocomplete="name"></label>
+            <label>Email<input id="fEmail" type="email" autocomplete="email"></label>
+            <label>Phone<input id="fPhone" autocomplete="tel"></label>
+            <label>Mailing address (for paper copies)<input id="fAddress" autocomplete="street-address"></label>
+          </div>
+          <div class="err" id="err"></div>
+          <div class="inline"><button class="btn" type="button" id="check">Check my request</button><button class="btn primary" type="submit">Submit request</button></div>
+        </form>`;
+      document.getElementById('trackForm').onsubmit = (e) => { e.preventDefault(); location.search = `?city=${CITY}&ref=${encodeURIComponent(document.getElementById('tRef').value.trim().toUpperCase())}`; };
+      const v = (id) => document.getElementById(id).value.trim();
+      document.getElementById('check').onclick = async (e) => {
+        if (v('fRecords').length < 8) { document.getElementById('err').textContent = 'Describe the records first.'; return; }
+        e.target.disabled = true;
+        const res = await fetch(`${API}/records/assist`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records: v('fRecords'), date_from: v('fFrom'), date_to: v('fTo') }) });
+        const h = await res.json().catch(() => ({ clear: true, questions: [] }));
+        e.target.disabled = false;
+        const box = document.getElementById('scope');
+        box.innerHTML = h.clear ? '<div class="note ok">Your request is specific. You can submit it.</div>'
+          : `<div class="note">${h.questions.map(esc).join(' ')}${h.suggestion ? `<p style="margin:8px 0 0">One way to put it: <b>${esc(h.suggestion)}</b> <button class="btn" type="button" id="useIt" style="height:30px;margin-left:6px">Use this</button></p>` : ''}</div>`;
+        document.getElementById('useIt')?.addEventListener('click', () => { document.getElementById('fRecords').value = h.suggestion; box.innerHTML = ''; });
+      };
+      document.getElementById('reqForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = e.submitter; btn.disabled = true;
+        const res = await fetch(`${API}/records`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          records: v('fRecords'), date_from: v('fFrom'), date_to: v('fTo'), format: v('fFormat'), organization: v('fOrg'), name: v('fName'), email: v('fEmail'), phone: v('fPhone'), address: v('fAddress') }) });
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) { document.getElementById('err').textContent = r.error || 'Something went wrong. Please try again.'; btn.disabled = false; return; }
+        location.href = `?city=${CITY}&ref=${encodeURIComponent(r.ref)}&key=${encodeURIComponent(r.key)}&new=1`;
+      };
+    }
+
+    boot();
+  })();
+  </script>
+</body>
+</html>

@@ -295,10 +295,11 @@
     window.onhashchange = route;
     route();
     refreshBadges();
+    shellHooks.forEach((f) => f());
   }
 
   function navGroup(label, items) {
-    const links = items.map((it) => (Array.isArray(it) ? it : [it])).filter(([key]) => can(ROUTES[key].perm)).map(([key, badge]) => navLink(key, badge));
+    const links = [...items, ...(extraNav[label] || [])].map((it) => (Array.isArray(it) ? it : [it])).filter(([key]) => can(ROUTES[key].perm)).map(([key, badge]) => navLink(key, badge));
     return links.length ? `${label ? `<div class="nav-label">${label}</div>` : ''}${links.join('')}` : '';
   }
 
@@ -1118,7 +1119,7 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
 
   /* ---------------- Activity (audit log) ---------------- */
 
-  const AUDIT_TYPES = [['', 'All'], ['document', 'Knowledge base'], ['request', 'Requests'], ['staff', 'Staff & access'], ['conversation', 'Conversations'], ['settings', 'Settings'], ['city', 'City']];
+  const AUDIT_TYPES = [['', 'All'], ['document', 'Knowledge base'], ['request', 'Requests'], ['records_request', 'Public records'], ['staff', 'Staff & access'], ['conversation', 'Conversations'], ['settings', 'Settings'], ['city', 'City']];
 
   async function renderActivity(page, append = false) {
     state.auditType ??= '';
@@ -1138,6 +1139,17 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
     $('#aTypes').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; state.auditType = c.dataset.v; renderActivity(page); };
     $('#aMore')?.addEventListener('click', () => renderActivity(page, true));
   }
+
+  // Feature pages in their own files (e.g. /licensing.js) register here and use the dashboard's helpers.
+  const extraNav = {};
+  const shellHooks = [];
+  window.CHOS = {
+    addPage(key, r, group, badgeId) { ROUTES[key] = r; (extraNav[group] ||= []).push(badgeId ? [key, badgeId] : key); if (state.city) renderShell(); },
+    onShell(fn) { shellHooks.push(fn); },
+    api, esc, icon, pill, ago, toDate, fmt, toast, md, modal, openDrawer, closeDrawer, can, emptyNote, kpi, route,
+    get state() { return state; },
+    get API() { return API; },
+  };
 
   window.addEventListener('hashchange', () => { if (!state.me && /^#\/setup\//.test(location.hash)) boot(); });
   boot();

@@ -4,6 +4,7 @@
 // Every change made by staff, residents or the AI is written to that city's append-only audit log.
 import { DurableObject } from 'cloudflare:workers';
 import { DEFAULT_DEPARTMENTS, DEFAULT_REQUEST_TYPES } from './templates.js';
+import { RECORDS, RECORDS_TABLES } from './records-store.js';
 
 const now = () => new Date().toISOString();
 const uid = (p) => p + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
@@ -192,6 +193,119 @@ const MIGRATIONS = [
   CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   `,
+  // Public records requests (records.js). Numbered per city: {prefix}-PRR-1001.
+  `
+  CREATE TABLE records_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref TEXT NOT NULL UNIQUE,
+    access_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'acknowledged', 'in_progress', 'awaiting_payment', 'ready', 'closed')),
+    outcome TEXT CHECK (outcome IN ('fulfilled', 'partial', 'denied', 'no_records', 'withdrawn')),
+    records TEXT NOT NULL,
+    summary TEXT,
+    date_from TEXT,
+    date_to TEXT,
+    format TEXT NOT NULL DEFAULT 'electronic' CHECK (format IN ('electronic', 'paper', 'inspection')),
+    name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    address TEXT,
+    organization TEXT,
+    assignee_id TEXT REFERENCES staff(id),
+    department_id TEXT REFERENCES departments(id),
+    source TEXT NOT NULL DEFAULT 'web',
+    convo_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    received_at TEXT NOT NULL,
+    due_date TEXT NOT NULL,
+    extended_due TEXT,
+    extension_reason TEXT,
+    acknowledged_at TEXT,
+    fee_status TEXT NOT NULL DEFAULT 'none' CHECK (fee_status IN ('none', 'estimated', 'requested', 'paid', 'waived')),
+    fee_cents INTEGER NOT NULL DEFAULT 0,
+    fee_lines TEXT,
+    paid_cents INTEGER NOT NULL DEFAULT 0,
+    paid_at TEXT,
+    payment_note TEXT,
+    exemptions TEXT,
+    denial_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+  );
+  CREATE INDEX records_requests_status ON records_requests (status, id);
+  INSERT INTO sqlite_sequence (name, seq) VALUES ('records_requests', 1000);
+
+  -- The request's timeline. Public rows are shown on the requester's tracking page.
+  CREATE TABLE records_events (
+    id INTEGER PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES records_requests(id) ON DELETE CASCADE,
+    at TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_id TEXT,
+    actor_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    note TEXT,
+    public INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX records_events_request ON records_events (request_id, id);
+
+  -- Records gathered for a request. Only approved files are released, and only when staff release them.
+  CREATE TABLE records_files (
+    id TEXT PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES records_requests(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    mime TEXT,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    file_key TEXT NOT NULL,
+    doc_id TEXT,
+    source TEXT NOT NULL DEFAULT 'upload' CHECK (source IN ('upload', 'knowledge')),
+    flags TEXT,
+    status TEXT NOT NULL DEFAULT 'review' CHECK (status IN ('review', 'approved', 'withheld', 'released')),
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    released_at TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX records_files_request ON records_files (request_id);
+
+  -- Letters to the requester. Drafts (often written by the AI) go out only after staff approve and send them.
+  CREATE TABLE records_letters (
+    id TEXT PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES records_requests(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('acknowledgment', 'extension', 'fee_estimate', 'response', 'denial', 'other')),
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'sent', 'discarded')),
+    drafted_by TEXT NOT NULL,
+    approved_by TEXT,
+    approved_at TEXT,
+    sent_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX records_letters_request ON records_letters (request_id);
+
+  -- AI suggestions (likely responsive documents) that staff accept or reject.
+  CREATE TABLE records_suggestions (
+    id TEXT PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES records_requests(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+    decided_by TEXT,
+    decided_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX records_suggestions_request ON records_suggestions (request_id);
+
+  -- The city's records rules: response deadline, holidays, fee schedule, exemptions.
+  CREATE TABLE records_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  `,
 ];
 
 const DOC_COLS = 'id, title, category, source_url, authority, visibility, verification, as_of, file_name, mime, bytes, chars, chunks, status, error, notes, created_by, updated_by, created_at, updated_at';
@@ -298,6 +412,9 @@ export class CityStore extends DurableObject {
   record(actor, action, entityType, entityId, summary, changes) {
     this.log(actor, action, entityType, entityId, summary, changes);
   }
+
+  // Public records requests: the operations live in records-store.js.
+  records(op, ...args) { return RECORDS[op].apply(this, args); }
 
   /* ---------------- Knowledge base ---------------- */
 
@@ -581,7 +698,8 @@ export class CityStore extends DurableObject {
 
   // Everything this city has, for backups or when a city wants its data.
   exportAll() {
-    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log'];
+    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log',
+      ...RECORDS_TABLES];
     return Object.fromEntries(tables.map((t) => [t, this.all(`SELECT * FROM ${t}`)]));
   }
 

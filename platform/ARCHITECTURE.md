@@ -77,6 +77,23 @@ Staff see it under **Activity** in the dashboard.
 Service requests also keep a `request_events` timeline. Status changes are shown to the resident on the
 tracking page; staff notes are not.
 
+## Public records requests
+
+`src/records.js` (routes), `src/records-store.js` (the city store's `records_*` tables) and `src/records-rules.js`
+(deadlines, working days, fees, redaction checks). Residents request records through the chat (`public/embed-records.js`)
+or `/records?city={slug}`, and follow them on a tracking page. Requests are numbered `{prefix}-PRR-1001`.
+
+- **Deadlines** are a per-city setting because every state differs. Mississippi cities start with Miss. Code Ann.
+  § 25-61-5: respond within 7 working days, or up to 14 with a written explanation to the requester. Working days skip
+  weekends, the state's legal holidays and any closure days the city adds.
+- **The AI only suggests**: likely responsive documents from the knowledge base, drafts of the acknowledgment and
+  response letters, a narrower wording of a vague request, and possible redactions (Social Security, card and account
+  numbers, personal contact details) in each file. Staff accept or reject each suggestion.
+- **Nothing reaches a requester without staff approval.** Letters are drafts until approved and sent; files are released
+  only if approved, every flagged redaction is resolved, the fee is paid or waived, and staff release the request with an
+  approved response letter. Denials must cite the exemption. Released files download through the requester's private link.
+- `records.view` sees the queue and log; `records.manage` works requests. Administrators set the rules and fee schedule.
+
 ## Adding a city
 
 ```bash

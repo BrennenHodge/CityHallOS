@@ -96,7 +96,7 @@
   .btn.danger { background: #b42318; border-color: #b42318; color: #fff; }
   .welcome { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 16px; }
   .welcome p { margin: 0 0 12px; }
-  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 8px; }
   .tile { display: grid; gap: 6px; justify-items: center; text-align: center; padding: 12px 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--paper);
     cursor: pointer; font-size: 12.5px; font-weight: 600; line-height: 1.25; }
   .tile:hover { border-color: var(--brand); color: var(--brand); }
@@ -253,6 +253,7 @@
           <button class="tile" data-act="forms"><span>${icon('file')}</span>Permits &amp; forms</button>
           <button class="tile" data-act="report"><span>${icon('alert')}</span>Report an issue</button>
           <button class="tile" data-act="track"><span>${icon('search')}</span>Track a request</button>
+          ${modules.map((m) => m.tiles?.() || '').join('')}
         </div>
       </div>
       ${state.items.length ? '' : `<div class="chips">${(cfg.suggestions || []).map((s) => `<button class="chip" data-ask="${esc(s)}">${esc(s)}</button>`).join('')}</div>`}`;
@@ -275,6 +276,7 @@
       ${f.offerReport && !it.reported ? `<div class="actions"><button class="btn primary" data-act="report-from" data-i="${i}">${icon('alert', 15)} Report this issue</button></div>` : ''}
       ${f.needsStaff ? `<div class="note">${icon('check', 14)} Flagged for City Hall staff to follow up.</div>` : ''}
       ${it.buttons ? `<div class="actions">${it.buttons}</div>` : ''}
+      ${modules.map((m) => m.actions?.(it, i) || '').join('')}
     </div>`;
   }
 
@@ -287,12 +289,29 @@
   const bot = (text, extra = {}) => push({ role: 'bot', text, ...extra });
   const card = (html) => push({ role: 'bot', kind: 'card', html });
 
+  // Add-ons listed in /config "modules" load from /embed-{name}.js and register here with the chat's helpers.
+  // Each may provide tiles(), actions(item, i), click(act, el), input(text) and hint(flow); input and click return true when handled.
+  const modules = [];
+  window.__cityhallosRegister = (factory) => {
+    modules.push(factory({ API, ORIGIN, PAGE, CITY, cfg: () => cfg, state, persist, push, bot, card, drawLog, drawFlowHint, focusInput, ask, esc, icon, md, absolute,
+      busy: (v) => { if (v !== undefined) busy = v; return busy; } }));
+    if (cfg) render();
+  };
+  const hook = (name, ...args) => { for (const m of modules) { const r = m[name]?.(...args); if (r) return r; } return null; };
+  const loadModule = (name) => {
+    if (!/^[a-z-]+$/.test(name)) return;
+    const s = document.createElement('script');
+    s.src = `${ORIGIN}/embed-${name}.js`; s.async = true;
+    document.head.appendChild(s);
+  };
+
   function onLogClick(e) {
     const ask = e.target.closest('[data-ask]');
     if (ask) { handleInput(ask.dataset.ask); return; }
     const act = e.target.closest('[data-act]');
     if (!act) return;
     const a = act.dataset.act;
+    if (hook('click', a, act)) return;
     if (a === 'forms') showForms();
     else if (a === 'report') startReport({});
     else if (a === 'track') { state.flow = { name: 'track' }; persist(); bot("What's your request number? It looks like **WIG-1001**."); drawFlowHint(); focusInput(); }
@@ -316,10 +335,11 @@
     if (!h) return;
     const f = state.flow;
     h.hidden = !f;
-    if (f) h.innerHTML = `${f.name === 'track' ? 'Checking a request' : 'Reporting an issue'} · <button type="button" id="cancelFlow">Cancel</button>`;
+    const mh = f && hook('hint', f);
+    if (f) h.innerHTML = `${mh?.label || (f.name === 'track' ? 'Checking a request' : 'Reporting an issue')} · <button type="button" id="cancelFlow">Cancel</button>`;
     h.querySelector('#cancelFlow')?.addEventListener('click', cancelFlow);
     const input = root.querySelector('#input');
-    if (input) input.placeholder = f?.name === 'report' ? ({ location: 'Street address, intersection or landmark', details: 'Add details, or type "skip"', contact: 'Name and phone or email, or "skip"' }[f.step] || 'Type your answer') : f?.name === 'track' ? 'e.g. WIG-1001' : 'Ask a question or describe a problem…';
+    if (input) input.placeholder = mh?.placeholder || (f?.name === 'report' ? ({ location: 'Street address, intersection or landmark', details: 'Add details, or type "skip"', contact: 'Name and phone or email, or "skip"' }[f.step] || 'Type your answer') : f?.name === 'track' ? 'e.g. WIG-1001' : 'Ask a question or describe a problem…');
   }
 
   function cancelFlow() { state.flow = null; photoFile = null; persist(); bot('No problem. What else can I help with?'); drawFlowHint(); }
@@ -327,6 +347,7 @@
   /* ---------------- Input routing ---------------- */
 
   async function handleInput(text) {
+    if (hook('input', text)) return;
     if (state.flow?.name === 'report' && state.flow.step !== 'confirm') { push({ role: 'user', text }); flowAnswer(text); return; }
     if (state.flow?.name === 'track' || /\b[A-Z]{2,5}-\d{4,6}\b/i.test(text) && /status|track|update|where|check|^\s*[A-Z]{2,5}-\d+\s*$/i.test(text)) {
       push({ role: 'user', text });
@@ -529,5 +550,5 @@
 
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.open && !PAGE) setOpen(false); });
 
-  fetch(`${API}/config`).then((r) => r.json()).then((c) => { cfg = c; render(); }).catch(() => { /* stay hidden if the service is unreachable */ });
+  fetch(`${API}/config`).then((r) => r.json()).then((c) => { cfg = c; (c.modules || []).forEach(loadModule); render(); }).catch(() => { /* stay hidden if the service is unreachable */ });
 })();
