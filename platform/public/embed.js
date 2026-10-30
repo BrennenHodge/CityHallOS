@@ -724,7 +724,7 @@
     persist();
     permitScript = permitScript || new Promise((resolve, reject) => {
       const el = document.createElement('script');
-      el.src = `${ORIGIN}/permit.js?v=12`; el.async = true; el.onload = resolve; el.onerror = reject;
+      el.src = `${ORIGIN}/permit.js?v=13`; el.async = true; el.onload = resolve; el.onerror = reject;
       document.head.appendChild(el);
     });
     permitScript.then(() => window.__chosPermit.mount({
