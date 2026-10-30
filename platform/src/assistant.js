@@ -18,7 +18,7 @@ export const isEmergency = (text) => EMERGENCY.test(text);
 // Residents reporting a problem (not asking how to report one) go straight to the report form.
 const REPORTS = [
   ['pothole', /\bpot ?holes?\b|\b(road|street) (is )?(damaged|broken|crumbling|caved)\b|\bsinkhole\b/i],
-  ['streetlight', /\bstreet ?lights? (is |are )?(out|off|broken|flickering|not working|dark)\b|\blight (is )?out on\b/i],
+  ['streetlight', /\bstreet ?lights?\b.{0,40}\b(is|are|went|been) (out|off|broken|flickering|not working|dark)\b|\bstreet ?lights? (out|off|broken|flickering|not working|dark)\b|\blight (is )?out on\b/i],
   ['water', /\bwater (main |line |pipe )?(leak|leaking|break|broke|gushing)\b|\b(no|low) water (pressure)?\b|\bleak(ing)? (in|on|at) the (street|road|yard)\b|\bhydrant\b.*\b(leak|broken|open)/i],
   ['sewer', /\bsewer\b.*\b(back(ed)? ?up|overflow|smell|odor)\b|\bsewage\b/i],
   ['drainage', /\b(ditch|culvert|drain|storm drain)\b.*\b(clogged|blocked|flooding|overflow)\b|\bstreet (is )?flooded\b/i],

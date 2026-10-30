@@ -16,6 +16,7 @@ const SYNONYMS = {
   pothole: ['street', 'road'], streetlight: ['light', 'street'], sewer: ['wastewater'], hours: ['open', 'office'],
   park: ['parks', 'recreation'], budget: ['audit', 'financial'], audit: ['financial', 'statements'],
   sign: ['signage'], shed: ['accessory', 'building'], pool: ['swimming', 'accessory'], occupancy: ['certificate'],
+  limits: ['jurisdiction', 'unincorporated'], outside: ['jurisdiction', 'unincorporated', 'county'], county: ['jurisdiction', 'unincorporated'],
 };
 
 // The city's own name ("Wiggins", "Mississippi") appears everywhere, so it says nothing about relevance.

@@ -154,6 +154,8 @@ async function route(request, env, ctx, url) {
     if (id && !sub && m === 'PATCH') { need('knowledge.edit'); return updateDocument(request, env, store, id, me); }
     if (id && !sub && m === 'DELETE') { need('knowledge.edit'); return deleteDocument(env, store, id, me); }
     if (id && sub === 'reprocess' && m === 'POST') { need('knowledge.edit'); return reprocessDocument(env, store, id, me); }
+    if (id && sub === 'verify' && m === 'POST') { need('knowledge.edit'); const doc = await store.verifyDocument(id, me.actor); return doc ? json({ document: doc }) : fail(404, 'Document not found'); }
+    if (id && sub === 'refresh' && m === 'POST') { need('knowledge.edit'); return refreshDocument(env, store, id, me); }
   }
   if (res === 'conversations') {
     if (!id && m === 'GET') { need('conversations.view'); return json({ conversations: await store.listConversations({ status: url.searchParams.get('status') }) }); }
@@ -166,6 +168,14 @@ async function route(request, env, ctx, url) {
     if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, store, id, me); }
   }
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
+  if (res === 'departments' && (m === 'POST' || m === 'PUT')) { need('settings.edit'); return saveDepartment(request, store, id, me); }
+  if (res === 'request-types') {
+    if (m === 'GET') { need('requests.view'); return json({ requestTypes: await store.requestTypesAdmin() }); }
+    if (m === 'POST' || m === 'PUT') { need('settings.edit'); return saveRequestType(request, store, id, me); }
+  }
+  if (res === 'freshness' && m === 'GET') { need('knowledge.view'); return json(await store.freshness()); }
+  if (res === 'freshness' && m === 'POST') { need('knowledge.edit'); return json(await store.checkSources(10)); }
+  if (res === 'report' && m === 'GET') { need('report.view'); return report(env, city, store, url); }
   if (res === 'staff') {
     if (!id && m === 'GET') { need('requests.view'); return listStaff(env, city, store, me); }
     if (!id && m === 'POST') { need('staff.manage'); return addStaff(request, env, city, store, me, url); }
@@ -347,7 +357,9 @@ async function chat(request, env, ctx, city, store, me) {
   const body = await request.json().catch(() => ({}));
   const question = String(body.message || '').trim().slice(0, 1200);
   if (!question) return fail(400, 'Message is required');
-  const staff = me?.can('assistant.test') && body.mode === 'staff';
+  // Staff tests and evals stay out of the city's conversation log and results; only 'staff' mode reads staff-only documents.
+  const testing = me?.can('assistant.test') && ['staff', 'eval'].includes(body.mode);
+  const staff = testing && body.mode === 'staff';
 
   if (env.CHAT_LIMIT && !me) {
     const ip = request.headers.get('CF-Connecting-IP') || 'anon';
@@ -355,7 +367,7 @@ async function chat(request, env, ctx, city, store, me) {
     if (!success) return fail(429, 'Too many messages. Please wait a minute and try again.');
   }
 
-  const channel = staff ? 'staff-test' : ['voice', 'sms'].includes(body.channel) ? body.channel : 'web';
+  const channel = testing ? 'staff-test' : ['voice', 'sms'].includes(body.channel) ? body.channel : 'web';
   const { convoId, history } = await store.beginTurn({
     convoId: typeof body.convoId === 'string' && /^c[a-f0-9]{12}$/.test(body.convoId) ? body.convoId : null,
     channel, pageUrl: String(body.pageUrl || '').slice(0, 300) || null,
@@ -553,6 +565,21 @@ async function deleteDocument(env, store, id, me) {
   return json({ ok: true });
 }
 
+// Re-imports a web page or online file from its original address, replacing the stored text.
+async function refreshDocument(env, store, id, me) {
+  const doc = await store.documentRow(id);
+  if (!doc?.source_url || !/^https?:\/\//.test(doc.source_url)) return fail(400, 'This document has no web address to re-import from');
+  const r = await fetch(doc.source_url, { headers: { 'User-Agent': 'CityHallOS knowledge import' }, redirect: 'follow' });
+  if (!r.ok) return fail(400, `Could not fetch the source (${r.status})`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const mime = (r.headers.get('Content-Type') || doc.mime || 'text/html').split(';')[0];
+  const name = doc.file_name || (mime.includes('html') ? 'page.html' : 'file');
+  if (doc.file_key) await env.FILES.put(doc.file_key, bytes, { httpMetadata: { contentType: mime } });
+  const updated = await processDocument(env, store, { ...doc, mime, file_name: name }, null, bytes, me, 'Re-imported from its source');
+  if (updated.status === 'ready') await store.clearSourceChange(id);
+  return json({ document: updated });
+}
+
 async function reprocessDocument(env, store, id, me) {
   const doc = await store.documentRow(id);
   if (!doc?.file_key) return fail(400, 'This document has no file to reprocess');
@@ -704,7 +731,7 @@ async function listStaff(env, city, store, me) {
 function staffInput(b) {
   return {
     name: clean(b.name, 120), title: clean(b.title, 120), department_id: clean(b.department_id, 60),
-    email: clean(b.email, 200)?.toLowerCase() ?? null, phone: clean(b.phone, 40),
+    email: clean(b.email, 200)?.toLowerCase() ?? null, phone: clean(b.phone, 40), notify_pref: b.notify_pref === 'sms' ? 'sms' : 'email',
   };
 }
 
@@ -788,6 +815,71 @@ async function newSetupLink(env, city, store, id, me, url) {
   return json({ setupUrl: `${url.origin}/#/setup/${token}` });
 }
 
+/* ---------------- City setup ---------------- */
+
+async function saveDepartment(request, store, id, me) {
+  const b = await request.json();
+  const d = { id: id || undefined };
+  if ('name' in b) d.name = clean(b.name, 80);
+  if ('phone' in b) d.phone = clean(b.phone, 40);
+  if ('email' in b) d.email = clean(b.email, 200);
+  if ('active' in b) d.active = b.active ? 1 : 0;
+  if (!id && !d.name) return fail(400, 'Enter a department name');
+  try {
+    return json({ departments: await store.saveDepartment(d, me.actor) });
+  } catch (e) {
+    return fail(400, e.message);
+  }
+}
+
+async function saveRequestType(request, store, key, me) {
+  const b = await request.json();
+  const t = { key: key || undefined };
+  if ('label' in b) t.label = clean(b.label, 80);
+  if ('department_id' in b) t.department_id = clean(b.department_id, 60);
+  if ('priority' in b) t.priority = b.priority;
+  if ('active' in b) t.active = b.active ? 1 : 0;
+  if ('default_assignee_id' in b) t.default_assignee_id = clean(b.default_assignee_id, 20);
+  for (const k of ['notify_staff', 'after_hours_staff']) if (Array.isArray(b[k])) t[k] = b[k].map((x) => clean(x, 20)).filter(Boolean).slice(0, 10);
+  if (!key && (!t.label || !t.department_id)) return fail(400, 'Enter a name and choose a department');
+  try {
+    return json({ requestTypes: await store.saveRequestType(t, me.actor) });
+  } catch (e) {
+    return fail(400, e.message);
+  }
+}
+
+// Is City Hall closed right now, by the city's own clock and office hours?
+function afterHours(city, at = new Date()) {
+  const s = city.settings;
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: city.timezone || 'America/Chicago', hourCycle: 'h23', weekday: 'short', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(at).map((x) => [x.type, x.value]));
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday);
+  const minutes = Number(p.hour) * 60 + Number(p.minute);
+  const toMin = (hm) => { const [h, mm] = String(hm).split(':').map(Number); return h * 60 + (mm || 0); };
+  return !(s.openDays || [1, 2, 3, 4, 5]).includes(day) || minutes < toMin(s.openTime || '08:00') || minutes >= toMin(s.closeTime || '17:00');
+}
+
+async function report(env, city, store, url) {
+  const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 730);
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const r = await store.report({ since, tzModifier: tzModifier(city.timezone) });
+  const s = city.settings;
+  const selfServed = r.answers.total - r.answers.needs_staff - r.answers.emergencies;
+  const minutesPerCall = Number(s.minutesPerCall) || 4;
+  return json({
+    days, since, ...r,
+    impact: {
+      selfServed,
+      selfServedRate: r.answers.total ? selfServed / r.answers.total : null,
+      minutesPerCall,
+      staffHoursSaved: (selfServed * minutesPerCall) / 60,
+      baselineCallsPerWeek: Number(s.baselineCallsPerWeek) || null,
+      questionsPerWeek: r.questions / (days / 7),
+    },
+  });
+}
+
 /* ---------------- Overview & settings ---------------- */
 
 async function overview(env, city, store) {
@@ -796,7 +888,7 @@ async function overview(env, city, store) {
 }
 
 const EDITABLE_SETTINGS = ['shortName', 'assistantName', 'tagline', 'greeting', 'brandColor', 'suggestions', 'phone', 'address', 'hours', 'website',
-  'publicSite', 'policeNonEmergency', 'profileNotes', 'disambiguation'];
+  'publicSite', 'policeNonEmergency', 'profileNotes', 'disambiguation', 'openTime', 'closeTime', 'openDays', 'minutesPerCall', 'baselineCallsPerWeek'];
 
 async function saveSettings(request, env, city, store, me) {
   const b = await request.json();
@@ -805,8 +897,12 @@ async function saveSettings(request, env, city, store, me) {
   const changes = {};
   for (const k of EDITABLE_SETTINGS) {
     if (!(k in b)) continue;
-    const v = k === 'suggestions' ? (Array.isArray(b[k]) ? b[k].map((x) => clean(x, 100)).filter(Boolean).slice(0, 6) : []) : clean(b[k], 1200) ?? '';
+    const v = k === 'suggestions' ? (Array.isArray(b[k]) ? b[k].map((x) => clean(x, 100)).filter(Boolean).slice(0, 6) : [])
+      : k === 'openDays' ? (Array.isArray(b[k]) ? [...new Set(b[k].map(Number).filter((d) => d >= 0 && d <= 6))].sort() : [1, 2, 3, 4, 5])
+      : clean(b[k], 1200) ?? '';
     if ((k === 'brandColor' && !/^#[0-9a-f]{6}$/i.test(v)) || (k === 'shortName' && !v)) continue;
+    if (['openTime', 'closeTime'].includes(k) && !/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) continue;
+    if (['minutesPerCall', 'baselineCallsPerWeek'].includes(k) && v !== '' && !(Number(v) >= 0)) continue;
     if (JSON.stringify(city.settings[k] ?? '') !== JSON.stringify(v)) changes[k] = [city.settings[k] ?? null, v];
     stored[k] = v;
   }
