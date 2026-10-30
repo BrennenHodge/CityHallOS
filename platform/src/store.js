@@ -539,6 +539,13 @@ export class CityStore extends DurableObject {
       this.run('INSERT INTO request_events (request_id, at, actor_type, actor_id, actor_name, status, note, public) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
         id, t, actor.type, actor.id ?? null, actor.name, 'new', `${actor.type === 'staff' || actor.type === 'operator' ? 'Logged by staff' : 'Submitted by resident'}. Routed to ${dept.name}.`);
       this.log(actor, 'request.create', 'request', ref, `${ref} created: ${type.label}${r.location ? ` at ${r.location}` : ''}, routed to ${dept.name}`);
+      // The request type's routing rule can assign new requests to someone straight away.
+      const assignee = type.default_assignee_id ? this.staffMember(type.default_assignee_id) : null;
+      if (assignee?.active) {
+        this.run("UPDATE requests SET assignee_id = ?, status = 'assigned' WHERE id = ?", assignee.id, id);
+        this.run("INSERT INTO request_events (request_id, at, actor_type, actor_name, status, note, public) VALUES (?, ?, 'system', 'Routing rule', 'assigned', ?, 1)",
+          id, t, `Assigned to ${assignee.name}`);
+      }
       if (convoId) {
         this.run("INSERT INTO messages (convo_id, role, content, flag, model, created_at) VALUES (?, 'assistant', ?, 'action', 'workflow', ?)",
           convoId, `Created service request ${ref} (${type.label}) and routed it to ${dept.name}.`, t);
@@ -546,6 +553,13 @@ export class CityStore extends DurableObject {
       return { id, ref, department: dept.name };
     });
   }
+
+  // New requests nobody has picked up, older than the cutoff and not yet reminded about.
+  staleRequests(cutoff) {
+    return this.all(`${REQUEST_SELECT} WHERE r.status = 'new' AND r.assignee_id IS NULL AND r.reminded_at IS NULL AND r.created_at < ? ORDER BY r.id`, cutoff);
+  }
+
+  markReminded(id) { this.run('UPDATE requests SET reminded_at = ? WHERE id = ?', now(), id); }
 
   setRequestPhoto(id, key) { this.run('UPDATE requests SET photo_key = ? WHERE id = ?', key, id); }
   requestPhotoKey(id) { return this.one('SELECT photo_key, department_id FROM requests WHERE id = ?', id); }
