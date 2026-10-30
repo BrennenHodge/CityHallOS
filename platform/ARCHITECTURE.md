@@ -38,7 +38,8 @@ is no shared table to forget a `WHERE city = ?` on.
 
 Each store holds that city's departments, request types, staff directory, knowledge base (documents, passages and
 the full-text index), conversations, citations, service requests with their timelines, permit applications (`permits`,
-`permit_files`, `permit_events`), the `outbox` of every email, text and call sent to a resident, and the audit log.
+`permit_files`, `permit_events`), crews and work orders, boards and meetings (agendas, minutes, action items), the `outbox`
+of every email, text and call sent to a resident, and the audit log.
 
 Why one database per city:
 
@@ -59,10 +60,10 @@ Defined in `src/auth.js`. Every staff API route names the permission it needs.
 
 | Role | Can |
 |---|---|
-| Administrator | Everything: staff accounts, roles, settings, export |
-| Knowledge editor | Add and change documents, review conversations, read the audit log, see permit applications |
-| Department staff | See and work only their department's requests, log phone and counter requests; staff of the permit department (Planning & Building by default) decide permit applications |
-| Viewer | See the dashboard and permit applications; resident names and contact details are hidden |
+| Administrator | Everything: staff accounts, roles, settings (including public notice rules), export |
+| Knowledge editor | Add and change documents, review conversations, read the audit log, see permit applications; keep boards, agendas and minutes, and approve publishing them (the City Clerk's role) |
+| Department staff | See and work only their department's requests, log phone and counter requests, dispatch their department's crews and work orders, submit agenda items and update action items assigned to them; staff of the permit department (Planning & Building by default) decide permit applications |
+| Viewer | See the dashboard, dispatch board, meetings and permit applications; resident names and contact details are hidden |
 
 City Hall OS support signs in with the `ADMIN_KEY` access code and acts as an administrator in every city.
 Scripts can send the same code as a bearer token.
@@ -113,7 +114,7 @@ back automatically, once; after that staff decide. Fees, templates and payment i
 ## Resident accounts
 
 `src/residents.js`. Residents sign in with a phone number and a 6-digit texted code (10 minutes, 5 tries, 5 codes an hour
-per number); no passwords. City store migration #4 adds `residents`, `resident_codes` and `resident_sessions` (codes and
+per number); no passwords. City store migration #8 (`MIGRATIONS[7]`) adds `residents`, `resident_codes` and `resident_sessions` (codes and
 session tokens stored as SHA-256 hashes) and `permits.resident_id`. A signed-in resident's applications follow them to
 any device, and their name, email and mailing address fill in new applications. Sign-in codes are never written to the
 outbox. Without Twilio the sign-in is unavailable and applications still work by secret link; locally,
@@ -161,6 +162,70 @@ Documents confirmed more than a year ago are listed for review again.
 - The **Results** page reports questions answered without staff, estimated staff time saved (from the minutes per call
   set in Settings), requests by type and department, and median time to first staff action and to resolution.
 
+## Public Works dispatcher
+
+Turns service requests into scheduled field work (`src/dispatch.js` for the API, `src/dispatch-store.js` for the data,
+`public/dispatch.js` for the dashboard pages). It builds on requests rather than replacing them:
+
+- **Crews** are named groups of people from the staff directory, one department each.
+- **Work orders** (`WO-1001`, …) belong to a request: crew, date, materials, labor notes and status (scheduled, in progress,
+  done, cancelled). A request can have several. Its status follows them: any scheduled → assigned, any started → in progress,
+  all done → resolved. Marking a job done needs a before/after photo or a note. Photos are in R2 under `{city id}/work-orders/`.
+- **Residents** tracking a request see "Scheduled for <date>", "Rescheduled for <date>" and "Completed on <date>", and are sent
+  the same through `notify.js`.
+- **The dispatch board** shows today's and this week's work by crew and everything not scheduled yet; **the map** (Leaflet with
+  OpenStreetMap tiles) shows open requests and their work; **My work** is the phone view for crews.
+- **The dispatcher** suggests: likely duplicates (an earlier open report of the same problem within 80 m, or the same typed
+  address), a higher priority (hazard wording, several reports of one spot, a long wait), and a crew and day (work already
+  booked nearby, experience with the job, the lightest schedule). Staff accept or dismiss each one; a dismissed suggestion
+  isn't made again. Suggestions are recorded in the audit log as the AI's, decisions as the staff member's.
+- **Typed addresses** are placed on the map with the free US Census Bureau geocoder, falling back to OpenStreetMap's Nominatim.
+  Requests with GPS keep their own coordinates; anything that can't be placed is listed under "No location".
+
+## Meetings (`src/meetings.js`, `src/meetings-store.js`)
+
+The Meeting secretary keeps each city's boards (Board of Aldermen, planning commission…) and their members, and their
+meetings: regular, special and work sessions.
+
+- **Agendas.** Staff submit items (`meetings.submit`); the clerk accepts, returns and orders them (`meetings.manage`); a
+  person with `meetings.approve` publishes. Publishing after the notice deadline is refused until the approver confirms and
+  gives a reason, and the agenda is marked late. Deadlines are per-city settings (`meetings/settings`); Mississippi cities
+  default to the Open Meetings Act (Miss. Code Ann. § 25-41-13 notice, § 25-41-11 minutes within 30 days), cited in
+  `meetings.js`.
+- **Minutes.** Recordings upload to R2 (`{city id}/meetings/{meeting id}/`) in multipart parts and are transcribed with
+  Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`) one segment per request, so long meetings show progress and
+  resume: MP3 is read from R2 in 2 MB byte ranges; other audio and video is decoded in the dashboard into two-minute
+  16 kHz WAV segments. The AI drafts minutes from the transcript or the clerk's typed notes (attendance, motions with
+  mover and seconder, votes by name, action items) and lists what to double-check. The clerk edits; a person approves.
+- **Publishing.** Residents see only published agendas and approved minutes, at `/{city}/meetings`. Both are snapshots, so
+  a revision in progress never changes what is public. Each is also added to the knowledge base (category
+  "Meetings & Minutes", verified current), so the AI City Clerk can cite the board's decisions.
+- **Action items** from a meeting are assigned to staff; the assignee updates the status.
+- **Past meetings and other governments.** Meetings can be added after the fact (`historical`, no deadlines) with notes
+  from another source, such as a local news recap (`PUT /meetings/{id}/record`). Residents see the notes labeled with their
+  source, never as minutes, and the knowledge base holds them as a news report. Boards can be another government's body
+  (`external`, e.g. the county board of supervisors), listed for residents without deadlines for the clerk.
+  `scripts/import_civic_notes.py` loads every meeting recap from WigginsMS.com Civic Notes this way; it is safe to rerun.
+
+Every change is in the audit log under the meeting (`entity_type = 'meeting'`).
+
+## Public records requests
+
+`src/records.js` (routes), `src/records-store.js` (the city store's `records_*` tables) and `src/records-rules.js`
+(deadlines, working days, fees, redaction checks). Residents request records through the chat (`public/embed-records.js`)
+or `/records?city={slug}`, and follow them on a tracking page. Requests are numbered `{prefix}-PRR-1001`.
+
+- **Deadlines** are a per-city setting because every state differs. Mississippi cities start with Miss. Code Ann.
+  § 25-61-5: respond within 7 working days, or up to 14 with a written explanation to the requester. Working days skip
+  weekends, the state's legal holidays and any closure days the city adds.
+- **The AI only suggests**: likely responsive documents from the knowledge base, drafts of the acknowledgment and
+  response letters, a narrower wording of a vague request, and possible redactions (Social Security, card and account
+  numbers, personal contact details) in each file. Staff accept or reject each suggestion.
+- **Nothing reaches a requester without staff approval.** Letters are drafts until approved and sent; files are released
+  only if approved, every flagged redaction is resolved, the fee is paid or waived, and staff release the request with an
+  approved response letter. Denials must cite the exemption. Released files download through the requester's private link.
+- `records.view` sees the queue and log; `records.manage` works requests. Administrators set the rules and fee schedule.
+
 ## Adding a city
 
 ```bash
@@ -172,3 +237,35 @@ curl -X POST https://app.cityhallos.com/api/platform/cities \
 This creates the city as `onboarding` with default departments and request types. Then load its knowledge
 (`scripts/crawl.py`, `scripts/seed.py`), fill in Settings, add its first administrator under Staff & access, and
 set the status to `active` with `PUT /api/platform/cities/{slug}/status`.
+
+## Business licenses
+
+City business (privilege) licenses under Miss. Code Ann. § 27-17 (the sections are cited in `src/licensing-rules.js`).
+
+| Piece | Where |
+|---|---|
+| Rules: fees by class and employees, license periods, proration, late penalties, renewal-notice dates | `src/licensing-rules.js` |
+| Records in each city's store: `license_settings`, `license_applications`, `license_events`, `licenses` | `src/licensing-store.js` (mixed into `CityStore`) |
+| API under `/api/{city}/licenses`, guided intake, certificate PDF, renewal notices | `src/licensing.js` |
+| Chat and portal add-on | `public/embed-licensing.js` (loaded by `embed.js` from `/config` `modules`) |
+| Staff page: review queue, registry, settings | `public/licensing.js` (registers with `window.CHOS`) |
+| Public lookup and application tracking | `public/licenses.html?city={slug}&ref={ref}` |
+
+License classes, fees, the term and the wording are each city's own settings, edited under Business licenses > Settings.
+The § 27-17-9 schedule is offered as a template. The AI collects the application and explains the rules; staff review,
+assess the fee, take payment and issue or deny. Applications are numbered `{prefix}-BL-1001`, licenses `{prefix}-LIC-1001`.
+A daily cron sends renewal notices from the first day of the month before a license expires (§ 27-17-465).
+
+Permissions: `licenses.view` (every role), `licenses.manage` (administrators, and department staff of the licensing
+department, City Hall unless the city sets another), `licenses.settings` (administrators).
+
+## Online payments
+
+`src/payments.js` charges and refunds cards for anything a resident pays for online. No processor is connected yet, so
+the `test` provider is the only one: it accepts the standard test cards (4242 4242 4242 4242), declines the standard
+decline cards, and refuses every other number, so no real card is ever reported as charged. Card numbers are never stored
+or logged; only the last four digits, the brand and the payment id are kept. Stripe goes in as another provider there.
+
+Online payment is offered only where `PAYMENTS_PROVIDER` is set: `test` locally (`.dev.vars`) and on staging. Production
+has none until a real processor is connected, so residents are told to pay at City Hall and staff record cash and check
+payments.

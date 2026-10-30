@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Business licenses | City Hall OS</title>
+  <meta name="description" content="Check whether a business is licensed, and track a business license application.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --ink: #0b1324; --muted: #5e6779; --line: #e6e2d8; --paper: #fbfaf6; --brand: #1f5c46; --soft: #e5efe9; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; color: var(--ink); background: var(--paper); -webkit-font-smoothing: antialiased; }
+    a { color: var(--brand); }
+    [hidden] { display: none !important; }
+    .top { display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--line); background: #fff; }
+    .top img { width: 30px; height: 30px; }
+    .top strong { font-family: "Inter Tight", sans-serif; font-size: 17px; letter-spacing: -.02em; }
+    .top strong span { color: #2450e0; }
+    .top .city { margin-left: auto; font-size: 13.5px; color: var(--muted); text-align: right; }
+    main { max-width: 760px; margin: 0 auto; padding: 32px 16px 56px; display: grid; gap: 20px; }
+    h1 { font-family: "Inter Tight", sans-serif; font-size: clamp(28px, 4vw, 38px); line-height: 1.1; letter-spacing: -.03em; margin: 0 0 6px; }
+    h2 { font-size: 17px; margin: 0 0 10px; }
+    p { margin: 0; color: var(--muted); }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+    form { display: flex; gap: 8px; flex-wrap: wrap; }
+    input, textarea { font: inherit; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--paper); flex: 1; min-width: 200px; }
+    textarea { width: 100%; min-height: 80px; resize: vertical; }
+    input:focus, textarea:focus { outline: 3px solid #8fa9ff; outline-offset: 1px; background: #fff; }
+    button, .btn { font: inherit; font-weight: 600; border: 1px solid var(--brand); background: var(--brand); color: #fff; border-radius: 12px; padding: 10px 16px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+    .btn.ghost { background: #fff; color: var(--brand); }
+    .ref { font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 700; font-size: 20px; letter-spacing: .02em; }
+    .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--soft); color: var(--brand); }
+    .pill.warn { background: #fff1d6; color: #8a5100; } .pill.bad { background: #fde8e6; color: #b42318; }
+    .rows { display: grid; gap: 6px; margin: 14px 0; }
+    .row { display: grid; grid-template-columns: 130px 1fr; gap: 10px; font-size: 14px; }
+    .row b { color: var(--muted); font-weight: 600; }
+    .progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 12px 0 4px; }
+    .progress i { height: 6px; border-radius: 99px; background: #eceae3; } .progress i.on { background: var(--brand); }
+    .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; font-size: 11.5px; color: var(--muted); }
+    .timeline { display: grid; gap: 10px; margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 14px; }
+    .timeline div { font-size: 14px; } .timeline small { display: block; color: var(--muted); font-size: 12.5px; }
+    .result { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+    .result:first-child { border-top: 0; }
+    .result strong { display: block; } .result small { color: var(--muted); }
+    .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
+    .error { color: #b42318; font-size: 14px; margin-top: 8px; }
+    @media (max-width: 560px) { .row { grid-template-columns: 1fr; gap: 0; } .top { padding: 12px 16px; } }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <img src="/favicon.svg" alt="">
+    <strong>City Hall <span>OS</span></strong>
+    <div class="city" id="cityName"></div>
+  </header>
+  <main>
+    <section>
+      <h1>Business licenses</h1>
+      <p id="intro">Check whether a business has a city privilege license, or follow your own application.</p>
+    </section>
+
+    <section class="card" id="trackCard">
+      <h2>Track your application</h2>
+      <form id="trackForm"><input id="ref" placeholder="Reference number, like WIG-BL-1001" aria-label="Application reference number" autocomplete="off"><button>Check status</button></form>
+      <div id="trackOut"></div>
+    </section>
+
+    <section class="card">
+      <h2>Is this business licensed?</h2>
+      <form id="lookupForm"><input id="q" placeholder="Business name or license number" aria-label="Business name or license number"><button>Search</button></form>
+      <div id="lookupOut"></div>
+      <p class="note">Shows licenses in the city's registry. Home-based businesses are listed without their home address. Licenses issued on paper before this registry may not appear yet; City Hall can confirm.</p>
+    </section>
+
+    <section class="card" id="applyCard">
+      <h2>Apply or renew</h2>
+      <p>Start a new license or a renewal with the city's AI assistant, any time. City Hall staff review every application and issue the license.</p>
+      <p style="margin-top:12px"><a class="btn" id="applyLink" href="#">Start an application</a></p>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      const city = (params.get('city') || location.pathname.split('/').filter(Boolean)[0] || '').replace(/[^a-z0-9-]/gi, '');
+      const API = `/api/${city}/licenses`;
+      const $ = (s) => document.querySelector(s);
+      const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      const day = (s) => new Date(`${s.slice(0, 10)}T12:00:00Z`).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      const money = (c) => `$${(c / 100).toFixed(2)}`;
+      const STEPS = [['submitted', 'Received'], ['in_review', 'Under review'], ['awaiting_payment', 'Fee due'], ['issued', 'Issued']];
+      const TONE = { needs_info: 'warn', awaiting_payment: 'warn', denied: 'bad', withdrawn: 'bad' };
+      let info = null;
+
+      fetch(`${API}/info`).then((r) => (r.ok ? r.json() : null)).then((i) => {
+        if (!i) { $('#intro').textContent = 'This city was not found.'; return; }
+        info = i;
+        document.title = `Business licenses | ${i.cityName}`;
+        $('#cityName').innerHTML = `${esc(i.cityName)}${i.county ? `<br>${esc(i.county)}` : ''}`;
+        $('#ref').placeholder = `Reference number, like ${i.prefix}-BL-1001`;
+        $('#intro').textContent = `Check whether a business has a ${i.cityName} privilege license, or follow your own application. ${i.term}`;
+        $('#applyLink').href = `/${encodeURIComponent(city)}/`;
+      });
+
+      async function track(ref) {
+        const out = $('#trackOut');
+        out.innerHTML = '<p class="note">Checking…</p>';
+        const res = await fetch(`${API}/track/${encodeURIComponent(ref.toUpperCase())}`);
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) { out.innerHTML = `<p class="error">${esc(r.error || 'Not found')}. Check the number${info?.phone ? `, or call City Hall at ${esc(info.phone)}` : ''}.</p>`; return; }
+        history.replaceState(null, '', `?city=${encodeURIComponent(city)}&ref=${encodeURIComponent(r.ref)}`);
+        const at = Math.max(0, STEPS.findIndex(([s]) => s === (r.status === 'needs_info' ? 'in_review' : r.status === 'paid' ? 'awaiting_payment' : r.status)));
+        out.innerHTML = `
+          <div style="margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="ref">${esc(r.ref)}</span><span class="pill ${TONE[r.status] || ''}">${esc(r.status_label)}</span></div>
+          ${['denied', 'withdrawn'].includes(r.status) ? '' : `<div class="progress">${STEPS.map((s, i) => `<i class="${i <= at ? 'on' : ''}"></i>`).join('')}</div><div class="steps">${STEPS.map(([, l]) => `<span>${l}</span>`).join('')}</div>`}
+          <div class="rows">
+            <div class="row"><b>Business</b><span>${esc(r.business_name)}</span></div>
+            <div class="row"><b>Application</b><span>${r.kind === 'renewal' ? 'Renewal' : 'New license'}${r.class_label ? ` · ${esc(r.class_label)}` : ''}</span></div>
+            <div class="row"><b>Received</b><span>${new Date(r.created_at).toLocaleDateString()}</span></div>
+            ${r.fee_cents != null ? `<div class="row"><b>Fee</b><span>${money(r.fee_cents)}${r.paid ? ' · paid' : ''}</span></div>` : ''}
+            ${r.license ? `<div class="row"><b>License</b><span>${esc(r.license.number)}, valid ${day(r.license.issued_on)} through ${day(r.license.expires_on)}</span></div>` : ''}
+            ${r.decision_reason ? `<div class="row"><b>Reason</b><span>${esc(r.decision_reason)}</span></div>` : ''}
+          </div>
+          ${r.next ? `<p style="color:var(--ink)">${esc(r.next)}</p>` : ''}
+          ${r.canPay && r.payments?.enabled ? `<form id="payForm" style="margin-top:14px;display:grid;gap:8px;border:1px solid var(--line);border-radius:14px;padding:14px">
+            <div style="display:flex;justify-content:space-between;align-items:center"><b>Pay ${money(r.balance_cents)} online</b>${r.payments.testMode ? '<span class="pill warn">Test mode</span>' : ''}</div>
+            <input name="name" placeholder="Name on card" autocomplete="cc-name" aria-label="Name on card">
+            <input name="number" placeholder="Card number" inputmode="numeric" autocomplete="cc-number" aria-label="Card number">
+            <div style="display:flex;gap:8px;flex-wrap:wrap"><input name="exp" placeholder="MM/YY" autocomplete="cc-exp" aria-label="Expiration date" style="min-width:90px">
+              <input name="cvc" placeholder="CVC" inputmode="numeric" autocomplete="cc-csc" aria-label="Security code" style="min-width:90px">
+              <input name="zip" placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" aria-label="ZIP code" style="min-width:90px"></div>
+            ${r.payments.testMode ? '<p class="note" style="margin:0">No card processor is connected yet, so only test cards are accepted, such as 4242 4242 4242 4242 with any future date and any security code.</p>' : ''}
+            <div><button id="payBtn">Pay ${money(r.balance_cents)}</button></div><div id="payOut"></div></form>` : ''}
+          ${r.certificate ? `<p style="margin-top:12px"><a class="btn" href="${API}/track/${encodeURIComponent(r.ref)}/certificate" target="_blank" rel="noopener">Download your license (PDF)</a></p>` : ''}
+          ${['submitted', 'in_review', 'needs_info'].includes(r.status) ? `<form id="replyForm" style="margin-top:14px;display:grid"><label for="reply" style="font-size:14px;font-weight:600">${r.status === 'needs_info' ? 'Reply to City Hall' : 'Add a note for City Hall'}</label>
+            <textarea id="reply" placeholder="Your reply"></textarea><div><button>Send</button></div><div id="replyOut"></div></form>` : ''}
+          <div class="timeline">${r.updates.slice().reverse().map((u) => `<div>${esc(u.note || u.status)}<small>${new Date(u.at).toLocaleString()}</small></div>`).join('')}</div>`;
+        $('#payForm')?.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const f = e.target;
+          const card = Object.fromEntries(['name', 'number', 'exp', 'cvc', 'zip'].map((k) => [k, f.elements[k].value.trim()]));
+          $('#payBtn').disabled = true; $('#payBtn').textContent = 'Paying…';
+          const res2 = await fetch(`${API}/track/${encodeURIComponent(r.ref)}/pay`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ card, expectCents: r.balance_cents }) });
+          const r2 = await res2.json().catch(() => ({}));
+          if (!res2.ok) { $('#payOut').innerHTML = `<p class="error">${esc(r2.error || 'Payment failed')}</p>`; $('#payBtn').disabled = false; $('#payBtn').textContent = `Pay ${money(r.balance_cents)}`; return; }
+          track(r.ref);
+        });
+        $('#replyForm')?.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const message = $('#reply').value.trim();
+          if (!message) return;
+          const res2 = await fetch(`${API}/track/${encodeURIComponent(r.ref)}/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+          const r2 = await res2.json().catch(() => ({}));
+          if (!res2.ok) { $('#replyOut').innerHTML = `<p class="error">${esc(r2.error || 'Could not send')}</p>`; return; }
+          track(r.ref);
+        });
+      }
+
+      async function lookup(q) {
+        const out = $('#lookupOut');
+        out.innerHTML = '<p class="note">Searching…</p>';
+        const res = await fetch(`${API}/lookup?q=${encodeURIComponent(q)}`);
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) { out.innerHTML = `<p class="error">${esc(r.error || 'Search failed')}</p>`; return; }
+        out.innerHTML = r.results.length ? `<div style="margin-top:10px">${r.results.map((l) => `<div class="result"><div><strong>${esc(l.business_name)}${l.dba ? ` (${esc(l.dba)})` : ''}</strong>
+          <small>${esc(l.number)}${l.class_label ? ` · ${esc(l.class_label)}` : ''}<br>${esc(l.location || '')}</small></div>
+          <div style="text-align:right"><span class="pill ${l.status === 'active' ? '' : l.status === 'expired' ? 'warn' : 'bad'}">${l.status === 'active' ? 'Licensed' : l.status === 'expired' ? 'Expired' : 'Revoked'}</span>
+          <small style="display:block;margin-top:4px">${l.status === 'revoked' ? '' : `${l.status === 'active' ? 'Through' : 'On'} ${day(l.expires_on)}`}</small></div></div>`).join('')}</div>`
+          : `<p class="note">No license found for "${esc(q)}".</p>`;
+      }
+
+      $('#trackForm').addEventListener('submit', (e) => { e.preventDefault(); const v = $('#ref').value.trim(); if (v) track(v); });
+      $('#lookupForm').addEventListener('submit', (e) => { e.preventDefault(); const v = $('#q').value.trim(); if (v) lookup(v); });
+      if (params.get('ref')) { $('#ref').value = params.get('ref'); track(params.get('ref')); }
+    })();
+  </script>
+</body>
+</html>

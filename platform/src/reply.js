@@ -1,6 +1,8 @@
 // The AI City Clerk's reply to a resident, shared by the website chat, text messages and phone calls.
 import { search } from './search.js';
 import { buildUserMessage, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
+import { recordsIntro, wantsRecords } from './records.js';
+import { isLicenseQuestion, licensingSources } from './licensing.js';
 import { enabledForms, formList } from './permits/routes.js';
 import { detectForm } from './permits/forms/index.js';
 
@@ -28,14 +30,22 @@ export async function respond(env, city, store, { convoId, question, history = [
   const emit = async (event, data) => { if (send) await send(event, data); };
   let answer = '';
   let sources = [];
-  let flags = { needsStaff: false, offerReport: false, emergency: false, offerForm: null };
+  let flags = { needsStaff: false, offerReport: false, emergency: false, offerForm: null, offerRecords: false, offerLicense: false };
   const online = formList(city);
   let reportType = null;
   let type = null;
   try {
     const emergency = isEmergency(question);
-    type = emergency ? null : (await store.requestTypes()).find((t) => t.key === detectReport(question)) || null;
-    if (type) {
+    flags.offerRecords = !emergency && wantsRecords(question);
+    type = emergency || flags.offerRecords ? null : (await store.requestTypes()).find((t) => t.key === detectReport(question)) || null;
+    if (flags.offerRecords) {
+      // Public records requests have their own form (records.js): the website chat opens it, texts and calls get the link.
+      answer = ['web', 'staff-test'].includes(channel)
+        ? recordsIntro(s)
+        : `You can request public records from the City of ${s.shortName} online at ${env.APP_ORIGIN || 'https://app.cityhallos.com'}/records?city=${city.slug}. You'll get a tracking number and a link to follow your request.`;
+      await emit('meta', { convoId, sources: [] });
+      await emit('delta', { t: answer });
+    } else if (type) {
       reportType = type.key;
       flags.offerReport = true;
       answer = channel === 'web'
@@ -55,7 +65,10 @@ export async function respond(env, city, store, { convoId, question, history = [
       // Short follow-ups ("what about fences?") search better with the previous question attached.
       const lastUser = [...history].reverse().find((h) => h.role === 'user');
       const q = question.split(/\s+/).length < 6 && lastUser ? `${lastUser.content} ${question}` : question;
-      const hits = await search(env, store, s, q, { includeInternal, limit: 6 });
+      // Business license questions also get the city's license classes, fees and rules (licensing.js) as a source.
+      flags.offerLicense = isLicenseQuestion(q);
+      const hits = [...(flags.offerLicense ? await licensingSources(store, city, env.APP_ORIGIN || 'https://app.cityhallos.com') : []),
+        ...(await search(env, store, s, q, { includeInternal, limit: 6 }))];
       // A city PDF form among the sources links to its online application instead.
       const formOf = (url) => online.find((x) => url && x.formUrls.includes(url))?.kind || null;
       sources = [
@@ -93,7 +106,8 @@ export async function respond(env, city, store, { convoId, question, history = [
   }
   const cited = citedNumbers(answer);
   // Offer the online application the resident needs: what they asked for, or the city form the answer cites.
-  if (!flags.emergency && !reportType) {
+  // Records requests and business licenses have their own forms (records.js, licensing.js).
+  if (!flags.emergency && !reportType && !flags.offerRecords && !flags.offerLicense) {
     const kinds = enabledForms(city).map((x) => x.kind);
     const citedForm = sources.find((x) => cited.has(x.n) && x.form)?.form;
     flags.offerForm = [flags.formToken, detectForm(question), citedForm].find((k) => k && kinds.includes(k)) || null;
@@ -108,7 +122,7 @@ export async function recordReply(env, store, convoId, r) {
     convoId, answer: r.answer,
     sources: (r.used.length ? r.used : r.sources.slice(0, 3)).map(({ score, excerpt, ...x }) => x),
     flag: r.flags.emergency ? 'emergency' : r.flags.needsStaff ? 'needs_staff' : r.flags.offerReport ? 'report' : null,
-    model: r.flags.emergency || r.reportType ? 'rule' : modelName(env),
+    model: r.flags.emergency || r.reportType || r.flags.offerRecords ? 'rule' : modelName(env),
     status: r.flags.emergency ? 'emergency' : r.flags.needsStaff ? 'needs_review' : null,
     citedDocIds: r.used.filter((u) => u.docId).map((u) => u.docId),
   });

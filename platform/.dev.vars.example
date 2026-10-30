@@ -8,6 +8,8 @@ DEV_ADMIN_PASSWORD=local-dev-password
 # ANTHROPIC_API_KEY=
 # Lets you try the text and phone webhooks locally without Twilio's signature. Never set this in production.
 TWILIO_ALLOW_UNSIGNED=1
+# Card payments in test mode: only test cards such as 4242 4242 4242 4242 work. Never set this in production.
+PAYMENTS_PROVIDER=test
 
 # Local only: phone sign-in codes are shown on screen instead of texted.
 DEV_SHOW_CODES=1

@@ -4,6 +4,10 @@
 // Every change made by staff, residents or the AI is written to that city's append-only audit log.
 import { DurableObject } from 'cloudflare:workers';
 import { DEFAULT_DEPARTMENTS, DEFAULT_REQUEST_TYPES } from './templates.js';
+import { DISPATCH_MIGRATION, DISPATCH_TABLES, dispatchMethods } from './dispatch-store.js';
+import { MEETING_OPS, MEETING_TABLES } from './meetings-store.js';
+import { RECORDS, RECORDS_TABLES } from './records-store.js';
+import { licensingStore } from './licensing-store.js';
 
 const now = () => new Date().toISOString();
 const uid = (p) => p + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
@@ -290,6 +294,355 @@ const MIGRATIONS = [
   ALTER TABLE conversations ADD COLUMN flow TEXT;
   CREATE INDEX conversations_contact ON conversations (channel, contact, last_at);
   `,
+  // Public Works dispatcher: crews, work orders, geocoded locations and the dispatcher's suggestions (dispatch-store.js).
+  DISPATCH_MIGRATION,
+  // Meeting secretary (meetings-store.js): boards and their members, meetings, agendas, minutes and action items.
+  `
+  CREATE TABLE boards (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'board' CHECK (kind IN ('council', 'board', 'commission', 'committee', 'authority', 'other')),
+    description TEXT,
+    schedule TEXT,
+    location TEXT,
+    external INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE board_members (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL REFERENCES boards(id),
+    name TEXT NOT NULL,
+    seat TEXT,
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('presiding', 'vice', 'member', 'clerk', 'attorney', 'staff')),
+    voting INTEGER NOT NULL DEFAULT 1,
+    staff_id TEXT REFERENCES staff(id),
+    term_ends TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX board_members_board ON board_members (board_id, active, sort);
+
+  -- starts_at is the city's local wall time ("2026-11-03T18:00"). Published agendas and approved minutes are
+  -- kept as snapshots, so revising a draft never changes what residents already see.
+  -- historical meetings were entered after the fact (no notice or minutes deadlines). record_* is an account of the
+  -- meeting from another source, such as a local news recap: shown to residents as that, never as official minutes.
+  CREATE TABLE meetings (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL REFERENCES boards(id),
+    kind TEXT NOT NULL DEFAULT 'regular' CHECK (kind IN ('regular', 'special', 'work_session', 'community')),
+    title TEXT,
+    starts_at TEXT NOT NULL,
+    location TEXT,
+    purpose TEXT,
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'held', 'cancelled', 'postponed')),
+    historical INTEGER NOT NULL DEFAULT 0,
+    called_at TEXT,
+    notice_posted_at TEXT,
+    agenda_status TEXT NOT NULL DEFAULT 'draft' CHECK (agenda_status IN ('draft', 'ready', 'published')),
+    agenda_published TEXT,
+    agenda_published_at TEXT,
+    agenda_published_by TEXT,
+    agenda_late INTEGER NOT NULL DEFAULT 0,
+    agenda_doc_id TEXT,
+    transcript TEXT,
+    transcript_status TEXT NOT NULL DEFAULT 'none' CHECK (transcript_status IN ('none', 'transcribing', 'done')),
+    transcript_progress TEXT,
+    notes TEXT,
+    minutes_status TEXT NOT NULL DEFAULT 'none' CHECK (minutes_status IN ('none', 'draft', 'approved')),
+    minutes_draft TEXT,
+    minutes_source TEXT,
+    minutes_suggestions TEXT,
+    minutes_approved TEXT,
+    minutes_approved_at TEXT,
+    minutes_approved_by TEXT,
+    minutes_doc_id TEXT,
+    record_text TEXT,
+    record_source TEXT,
+    record_url TEXT,
+    record_doc_id TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX meetings_starts ON meetings (starts_at);
+  CREATE INDEX meetings_board ON meetings (board_id, starts_at);
+
+  CREATE TABLE agenda_items (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    ord INTEGER NOT NULL DEFAULT 0,
+    type TEXT NOT NULL DEFAULT 'action' CHECK (type IN ('consent', 'action', 'discussion', 'public_hearing', 'report')),
+    title TEXT NOT NULL,
+    description TEXT,
+    presenter TEXT,
+    department_id TEXT REFERENCES departments(id),
+    recommended_action TEXT,
+    status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'accepted', 'returned', 'withdrawn')),
+    review_note TEXT,
+    submitted_by TEXT NOT NULL,
+    submitted_by_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX agenda_items_meeting ON agenda_items (meeting_id, status, ord);
+
+  -- Agenda attachments and meeting recordings. The bytes live in R2 under {city id}/meetings/{meeting id}/.
+  CREATE TABLE meeting_files (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    item_id TEXT REFERENCES agenda_items(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('attachment', 'recording')),
+    file_key TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    mime TEXT,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    upload_id TEXT,
+    status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('uploading', 'ready')),
+    created_by TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX meeting_files_meeting ON meeting_files (meeting_id, kind);
+
+  CREATE TABLE action_items (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    item_id TEXT REFERENCES agenda_items(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    details TEXT,
+    assignee_id TEXT REFERENCES staff(id),
+    due_date TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'in_progress', 'done', 'cancelled')),
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+  );
+  CREATE INDEX action_items_status ON action_items (status, due_date);
+  CREATE INDEX action_items_assignee ON action_items (assignee_id, status);
+
+  CREATE TABLE meeting_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `,
+  // Public records requests (records.js). Numbered per city: {prefix}-PRR-1001.
+  `
+  CREATE TABLE records_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref TEXT NOT NULL UNIQUE,
+    access_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'acknowledged', 'in_progress', 'awaiting_payment', 'ready', 'closed')),
+    outcome TEXT CHECK (outcome IN ('fulfilled', 'partial', 'denied', 'no_records', 'withdrawn')),
+    records TEXT NOT NULL,
+    summary TEXT,
+    date_from TEXT,
+    date_to TEXT,
+    format TEXT NOT NULL DEFAULT 'electronic' CHECK (format IN ('electronic', 'paper', 'inspection')),
+    name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    address TEXT,
+    organization TEXT,
+    assignee_id TEXT REFERENCES staff(id),
+    department_id TEXT REFERENCES departments(id),
+    source TEXT NOT NULL DEFAULT 'web',
+    convo_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    received_at TEXT NOT NULL,
+    due_date TEXT NOT NULL,
+    extended_due TEXT,
+    extension_reason TEXT,
+    acknowledged_at TEXT,
+    fee_status TEXT NOT NULL DEFAULT 'none' CHECK (fee_status IN ('none', 'estimated', 'requested', 'paid', 'waived')),
+    fee_cents INTEGER NOT NULL DEFAULT 0,
+    fee_lines TEXT,
+    paid_cents INTEGER NOT NULL DEFAULT 0,
+    paid_at TEXT,
+    payment_note TEXT,
+    exemptions TEXT,
+    denial_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+  );
+  CREATE INDEX records_requests_status ON records_requests (status, id);
+  INSERT INTO sqlite_sequence (name, seq) VALUES ('records_requests', 1000);
+
+  -- The request's timeline. Public rows are shown on the requester's tracking page.
+  CREATE TABLE records_events (
+    id INTEGER PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES records_requests(id) ON DELETE CASCADE,
+    at TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_id TEXT,
+    actor_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    note TEXT,
+    public INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX records_events_request ON records_events (request_id, id);
+
+  -- Records gathered for a request. Only approved files are released, and only when staff release them.
+  CREATE TABLE records_files (
+    id TEXT PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES records_requests(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    mime TEXT,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    file_key TEXT NOT NULL,
+    doc_id TEXT,
+    source TEXT NOT NULL DEFAULT 'upload' CHECK (source IN ('upload', 'knowledge')),
+    flags TEXT,
+    status TEXT NOT NULL DEFAULT 'review' CHECK (status IN ('review', 'approved', 'withheld', 'released')),
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    released_at TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX records_files_request ON records_files (request_id);
+
+  -- Letters to the requester. Drafts (often written by the AI) go out only after staff approve and send them.
+  CREATE TABLE records_letters (
+    id TEXT PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES records_requests(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('acknowledgment', 'extension', 'fee_estimate', 'response', 'denial', 'other')),
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'sent', 'discarded')),
+    drafted_by TEXT NOT NULL,
+    approved_by TEXT,
+    approved_at TEXT,
+    sent_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX records_letters_request ON records_letters (request_id);
+
+  -- AI suggestions (likely responsive documents) that staff accept or reject.
+  CREATE TABLE records_suggestions (
+    id TEXT PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES records_requests(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+    decided_by TEXT,
+    decided_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX records_suggestions_request ON records_suggestions (request_id);
+
+  -- The city's records rules: response deadline, holidays, fee schedule, exemptions.
+  CREATE TABLE records_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  `,
+  // Business (privilege) licenses under Miss. Code Ann. § 27-17. See src/licensing.js.
+  `
+  -- The city's license classes, fees, term and wording, as one JSON document edited under Business licenses > Settings.
+  CREATE TABLE license_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_by TEXT,
+    updated_at TEXT NOT NULL
+  );
+
+  -- Numbered per city: {prefix}-BL-1001. A renewal is a new application for an existing license.
+  CREATE TABLE license_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'new' CHECK (kind IN ('new', 'renewal')),
+    license_id INTEGER REFERENCES licenses(id),
+    status TEXT NOT NULL DEFAULT 'submitted'
+      CHECK (status IN ('submitted', 'in_review', 'needs_info', 'awaiting_payment', 'paid', 'issued', 'denied', 'withdrawn')),
+    business_name TEXT NOT NULL,
+    dba TEXT,
+    description TEXT,
+    class_key TEXT,
+    entity_type TEXT,
+    owner_name TEXT,
+    phone TEXT,
+    email TEXT,
+    mailing_address TEXT,
+    location TEXT,
+    inside_limits TEXT CHECK (inside_limits IN ('yes', 'no', 'unsure')),
+    home_based INTEGER NOT NULL DEFAULT 0,
+    home TEXT,
+    employees INTEGER,
+    sos_id TEXT,
+    dor_account TEXT,
+    state_licenses TEXT,
+    start_date TEXT,
+    fee_cents INTEGER,
+    fee_lines TEXT,
+    paid_cents INTEGER,
+    payment_method TEXT CHECK (payment_method IN ('cash', 'check', 'card')),
+    payment_ref TEXT,
+    card_last4 TEXT,
+    receipt_no TEXT,
+    paid_at TEXT,
+    refunded_cents INTEGER,
+    refund_ref TEXT,
+    period_start TEXT,
+    period_end TEXT,
+    decision_reason TEXT,
+    source TEXT NOT NULL DEFAULT 'web',
+    convo_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT
+  );
+  CREATE INDEX license_applications_status ON license_applications (status, id);
+  INSERT INTO sqlite_sequence (name, seq) VALUES ('license_applications', 1000);
+
+  -- The timeline on an application. Public rows are shown on the applicant's tracking page.
+  CREATE TABLE license_events (
+    id INTEGER PRIMARY KEY,
+    application_id INTEGER NOT NULL REFERENCES license_applications(id) ON DELETE CASCADE,
+    at TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_id TEXT,
+    actor_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    note TEXT,
+    public INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX license_events_application ON license_events (application_id, id);
+
+  -- The registry. Expired is worked out from expires_on, so only revocation is stored.
+  CREATE TABLE licenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    number TEXT NOT NULL UNIQUE,
+    business_name TEXT NOT NULL,
+    dba TEXT,
+    class_key TEXT,
+    class_label TEXT,
+    owner_name TEXT,
+    phone TEXT,
+    email TEXT,
+    location TEXT,
+    home_based INTEGER NOT NULL DEFAULT 0,
+    issued_on TEXT NOT NULL,
+    expires_on TEXT NOT NULL,
+    fee_cents INTEGER,
+    application_id INTEGER REFERENCES license_applications(id),
+    revoked_at TEXT,
+    revoke_reason TEXT,
+    reminded_for TEXT,
+    reminder_result TEXT,
+    lapsed_notice_for TEXT,
+    source TEXT NOT NULL DEFAULT 'issued',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX licenses_expires ON licenses (expires_on);
+  CREATE INDEX licenses_name ON licenses (business_name);
+  INSERT INTO sqlite_sequence (name, seq) VALUES ('licenses', 1000);
+  `,
   // Resident accounts: phone sign-in, sessions, and who an application belongs to (residents.js).
   `
   -- Residents who sign in with their phone number. Applications they start (or open while signed in) are theirs,
@@ -461,6 +814,9 @@ export class CityStore extends DurableObject {
   record(actor, action, entityType, entityId, summary, changes) {
     this.log(actor, action, entityType, entityId, summary, changes);
   }
+
+  // Public records requests: the operations live in records-store.js.
+  records(op, ...args) { return RECORDS[op].apply(this, args); }
 
   /* ---------------- Knowledge base ---------------- */
 
@@ -1111,6 +1467,15 @@ export class CityStore extends DurableObject {
       .filter((p) => !p.reminders || p.updated_at < new Date(Date.now() - 3 * day).toISOString());
   }
 
+  /* ---------------- Meetings (meetings-store.js) ---------------- */
+
+  meetings(op, ...args) {
+    if (!Object.hasOwn(MEETING_OPS, op)) throw new Error(`Unknown meetings operation ${op}`);
+    // The operations call each other as this.row(), this.board()...; the store's own methods are on the prototype.
+    this.meetingOps ??= Object.assign(Object.create(this), MEETING_OPS);
+    return MEETING_OPS[op].apply(this.meetingOps, args);
+  }
+
   /* ---------------- Overview, audit, export ---------------- */
 
   overview(tzModifier = '+0 minutes') {
@@ -1152,7 +1517,9 @@ export class CityStore extends DurableObject {
   // Everything this city has, for backups or when a city wants its data.
   exportAll() {
     const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events',
-      'permits', 'permit_files', 'permit_events', 'outbox', 'audit_log'];
+      'permits', 'permit_files', 'permit_events', 'outbox', 'audit_log',
+      ...DISPATCH_TABLES, ...MEETING_TABLES, ...RECORDS_TABLES,
+      'license_settings', 'license_applications', 'license_events', 'licenses'];
     return Object.fromEntries(tables.map((t) => [t, this.all(`SELECT * FROM ${t}`)
       .map(({ token_hash, ...r }) => r)]));
   }
@@ -1229,3 +1596,9 @@ export class CityStore extends DurableObject {
     return { ...this.stats(), filesMoved: moved.size };
   }
 }
+
+// Crews, work orders and the dispatch board run in the same store as the requests they schedule.
+Object.assign(CityStore.prototype, dispatchMethods);
+
+// Business licensing methods (lic*), kept in their own module.
+Object.assign(CityStore.prototype, licensingStore);

@@ -1,5 +1,6 @@
 """End-to-end checks for the City Hall OS API: sign-in, roles, department scoping, contact redaction,
-city isolation, the knowledge base, service requests, the AI City Clerk and the audit log.
+city isolation, the knowledge base, service requests, the Public Works dispatcher, public records requests, business licenses,
+the AI City Clerk, meetings and the audit log.
 
 Usage: python -I test_api.py <origin> <key_file>
   python -I platform/scripts/test_api.py http://127.0.0.1:8787 platform/.dev.vars
@@ -8,7 +9,7 @@ Usage: python -I test_api.py <origin> <key_file>
 Each run creates two throwaway test cities with their own staff and archives them at the end, so it
 never touches a real city. It refuses to run against production.
 """
-import http.cookiejar, json, re, secrets, sys, urllib.error, urllib.parse, urllib.request
+import datetime, http.cookiejar, json, re, secrets, sys, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -37,6 +38,47 @@ def password():
     return 'Test-' + secrets.token_urlsafe(12)
 
 
+def raw(c, method, path, body=None, headers=None):
+    """A request whose body or response isn't JSON (photo uploads and downloads)."""
+    req = urllib.request.Request(f'{ORIGIN}/api{path}', data=body, method=method, headers={'User-Agent': 'CityHallOS-scripts/1.0', **(headers or {})})
+    try:
+        with c.opener.open(req, timeout=60) as r:
+            return r.status, r.headers.get('Content-Type', ''), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get('Content-Type', ''), e.read()
+
+
+def upload_photo(c, path, kind):
+    png = bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cfc0f01f0005000201e2219bc30000000049454e44ae426082')
+    b = 'chos' + secrets.token_hex(8)
+    body = (f'--{b}\r\nContent-Disposition: form-data; name="kind"\r\n\r\n{kind}\r\n'
+            f'--{b}\r\nContent-Disposition: form-data; name="photo"; filename="{kind}.png"\r\nContent-Type: image/png\r\n\r\n').encode() + png + f'\r\n--{b}--\r\n'.encode()
+    s, _, data = raw(c, 'POST', path, body, {'Content-Type': f'multipart/form-data; boundary={b}'})
+    return s, json.loads(data or b'{}')
+
+
+def raw_get(api, path):
+    """GET a non-JSON response: (status, body bytes, headers)."""
+    h = {'User-Agent': 'CityHallOS-scripts/1.0', **({'Authorization': f'Bearer {api.key}'} if api.key else {})}
+    try:
+        with api.opener.open(urllib.request.Request(ORIGIN + '/api' + path, headers=h), timeout=60) as r:
+            return r.status, r.read(), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), dict(e.headers)
+
+
+def upload_file(api, path, name, data):
+    """POST one file as multipart/form-data."""
+    boundary = 'chos' + secrets.token_hex(8)
+    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: text/plain\r\n\r\n').encode() + data + f'\r\n--{boundary}--\r\n'.encode()
+    h = {'User-Agent': 'CityHallOS-scripts/1.0', 'Content-Type': f'multipart/form-data; boundary={boundary}', **({'Authorization': f'Bearer {api.key}'} if api.key else {})}
+    try:
+        with api.opener.open(urllib.request.Request(ORIGIN + '/api' + path, data=body, method='POST', headers=h), timeout=120) as r:
+            return r.status, json.loads(r.read() or b'{}')
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b'{}')
+
+
 operator = Api(ORIGIN, KEY)
 A, B = f'test-{RUN}', f'test-{RUN}-b'
 for slug, name, prefix in [(A, f'Town of Testville {RUN}', 'TST'), (B, f'Town of Otherton {RUN}', 'OTH')]:
@@ -50,8 +92,8 @@ try:
     s, me = session().call('POST', '/auth/operator', {'code': KEY})
     ok(s == 200 and me['operator'], 'operator signs in with the access code')
 
-    def onboard(name, role, dept=None):
-        email = f"{role}-{name.split()[0].lower()}-{RUN}@example.test"
+    def onboard(name, role, dept=None, key=None):
+        email = f"{key or role}-{name.split()[0].lower()}-{RUN}@example.test"
         s, r = operator.call('POST', f'/{A}/staff', {'name': name, 'email': email, 'role': role, 'department_id': dept, 'title': 'Tester'})
         assert s == 201, (s, r)
         token = r['setupUrl'].split('/setup/')[1]
@@ -68,6 +110,7 @@ try:
     works, works_staff, _, _ = onboard('Pat Works', 'department', 'public-works')
     viewer, viewer_staff, _, _ = onboard('Vic Viewer', 'viewer')
     editor, _, _, _ = onboard('Eddie Editor', 'editor')
+    clerk, _, _, _ = onboard('Cleo Clerk', 'department', 'city-hall')
 
     s, _ = session().call('POST', '/auth/login', {'email': admin_email, 'password': 'wrong-password'})
     ok(s == 401, 'wrong password is rejected')
@@ -104,6 +147,120 @@ try:
     s, _ = viewer.call('POST', f'/{A}/documents', {'text': 'x' * 50, 'title': 'Nope'})
     ok(s == 403, "viewer can't add documents")
 
+    # Public Works dispatcher: crews, the dispatch board and its suggestions, work orders, the field view and the map.
+    s, r = admin.call('POST', f'/{A}/staff', {'name': 'Sam Water', 'department_id': 'water-sewer', 'title': 'Operator'})
+    water_staff = r['staff']
+    s, r = works.call('POST', f'/{A}/crews', {'name': 'Street Crew', 'members': [works_staff['id']], 'lead_id': works_staff['id']})
+    crew = r.get('crew') or {}
+    ok(s == 201 and crew.get('department_id') == 'public-works' and [m['name'] for m in crew['members']] == ['Pat Works'], 'department staff create a crew in their own department')
+    s, _ = works.call('POST', f'/{A}/crews', {'name': 'Not mine', 'department_id': 'water-sewer'})
+    ok(s == 403, "department staff can't create another department's crew")
+    s, r = admin.call('POST', f'/{A}/crews', {'name': 'Water Crew', 'department_id': 'water-sewer', 'members': [water_staff['id']]})
+    wcrew = r['crew']
+    s, _ = works.call('PATCH', f"/{A}/crews/{wcrew['id']}", {'name': 'Taken over'})
+    ok(s == 403, "department staff can't change another department's crew")
+    s, r = works.call('PATCH', f"/{A}/crews/{crew['id']}", {'members': [works_staff['id'], admin_staff['id']]})
+    ok(s == 200 and len(r['crew']['members']) == 2, 'crews are made of people from the staff directory')
+    s, _ = viewer.call('POST', f'/{A}/crews', {'name': 'Viewers'})
+    ok(s == 403, "viewers can't manage crews")
+
+    s, near1 = anon.call('POST', f'/{A}/requests', {'category': 'pothole', 'description': 'Pothole by the school, kids walk past it', 'location': 'GPS 30.86000, -89.13000',
+                                                     'name': 'Ann Resident', 'contact': 'ann@example.test'})
+    s, near2 = anon.call('POST', f'/{A}/requests', {'category': 'pothole', 'description': 'Big hole in the road', 'location': 'GPS 30.86010, -89.13005', 'contact': '601-555-0144'})
+    s, nowhere = anon.call('POST', f'/{A}/requests', {'category': 'sign', 'description': 'Stop sign bent over', 'location': 'Behind the old feed store'})
+    s, b = works.call('GET', f'/{A}/dispatch/board')
+    today = datetime.date.fromisoformat(b['today'])
+    tomorrow, later = (today + datetime.timedelta(days=1)).isoformat(), (today + datetime.timedelta(days=2)).isoformat()
+    refs = {x['ref'] for x in b['unscheduled']}
+    ok(s == 200 and {near1['ref'], near2['ref'], 'TST-1001'} <= refs and 'TST-1002' not in refs, "the board shows my department's unscheduled requests only")
+    ok([d['id'] for d in b['departments']] == ['public-works'] and [c['name'] for c in b['crews']] == ['Street Crew'], 'department staff dispatch only their own crews')
+    sug = {(x['ref'], x['kind']): x for x in b['suggestions']}
+    dup = sug.get((near2['ref'], 'duplicate'))
+    ok(dup and dup['data']['ref'] == near1['ref'] and dup['data']['metres'] < 20, f"the dispatcher flags a likely duplicate near the same spot ({dup and dup['reason']})")
+    pri = sug.get((near1['ref'], 'priority'))
+    ok(pri and pri['value'] == 'high', 'the dispatcher suggests a higher priority for a safety concern')
+    crew_sug = sug.get((near1['ref'], 'crew'))
+    ok(crew_sug and crew_sug['value'] == crew['id'] and crew_sug['data']['date'] > b['today'], 'the dispatcher suggests a crew and a day')
+    s, r = viewer.call('GET', f'/{A}/dispatch/board')
+    ok(s == 200 and all(x['contact'] in (None, 'Hidden') for x in r['unscheduled']), 'viewers see the board without resident contact details')
+    s, _ = editor.call('GET', f'/{A}/dispatch/board')
+    ok(s == 403, "knowledge editors don't see the dispatch board")
+    s, r = admin.call('GET', f'/{A}/dispatch/board')
+    ok({'public-works', 'water-sewer'} <= {d['id'] for d in r['departments']}, 'administrators dispatch for every department')
+    wsug = next((x for x in r['suggestions'] if x['ref'] == 'TST-1002' and x['kind'] == 'crew'), None)
+    s, _ = works.call('POST', f"/{A}/dispatch/suggestions/{wsug['id']}", {'decision': 'accept'})
+    ok(s == 403, "department staff can't act on another department's suggestions")
+
+    s, r = works.call('POST', f"/{A}/dispatch/suggestions/{dup['id']}", {'decision': 'accept'})
+    s2, t = anon.call('GET', f"/{A}/track/{near2['ref']}")
+    ok(s == 200 and t['status'] == 'closed' and any(near1['ref'] in (u['note'] or '') for u in t['updates']), 'accepting a duplicate closes it and tells the resident which report covers it')
+    s, r = works.call('POST', f"/{A}/dispatch/suggestions/{pri['id']}", {'decision': 'accept'})
+    s, r = works.call('GET', f'/{A}/requests')
+    ok(next(x for x in r['requests'] if x['ref'] == near1['ref'])['priority'] == 'high', 'accepting a priority suggestion changes the priority')
+    old = next((x for x in b['suggestions'] if x['ref'] == 'TST-1001' and x['kind'] == 'priority'), None)
+    s, _ = works.call('POST', f"/{A}/dispatch/suggestions/{old['id']}", {'decision': 'dismiss'})
+    s, b = works.call('GET', f'/{A}/dispatch/board')
+    ok(not any(x['ref'] == 'TST-1001' and x['kind'] == 'priority' for x in b['suggestions']), 'a dismissed suggestion is not made again')
+    s, _ = works.call('POST', f"/{A}/dispatch/suggestions/{dup['id']}", {'decision': 'dismiss'})
+    ok(s == 400, 'a suggestion can only be decided once')
+
+    s, r = works.call('POST', f"/{A}/dispatch/suggestions/{crew_sug['id']}", {'decision': 'accept', 'date': tomorrow})
+    wo_near = r.get('workOrder') or {}
+    ok(s == 200 and wo_near.get('ref') == 'WO-1001' and wo_near['scheduled_date'] == tomorrow and wo_near['crew'] == 'Street Crew', 'accepting a crew suggestion schedules a work order')
+    s, t = anon.call('GET', f"/{A}/track/{near1['ref']}")
+    ok(t['status'] == 'assigned' and t['scheduled_for'] == tomorrow and any((u['note'] or '').startswith('Scheduled for') for u in t['updates']),
+       'residents tracking the request see "scheduled for" the date')
+    s, r = works.call('POST', f'/{A}/work-orders', {'request_id': pid, 'crew_id': crew['id'], 'scheduled_date': b['today'], 'materials': '2 bags cold patch', 'labor_notes': 'Two people, one hour'})
+    wo = r.get('workOrder') or {}
+    ok(s == 201 and wo.get('materials') == '2 bags cold patch' and wo['status'] == 'scheduled', 'department staff schedule a work order with materials and labor notes')
+    s, _ = works.call('POST', f'/{A}/work-orders', {'request_id': water['id'], 'scheduled_date': b['today']})
+    ok(s == 403, "department staff can't schedule another department's work")
+    s, _ = admin.call('POST', f'/{A}/work-orders', {'request_id': pid, 'crew_id': wcrew['id']})
+    ok(s == 400, "a work order can't go to another department's crew")
+    s, _ = works.call('POST', f'/{A}/work-orders', {'request_id': pid, 'scheduled_date': '2026-02-30'})
+    ok(s == 400, 'work orders need a real date')
+
+    s, f = works.call('GET', f'/{A}/field')
+    ok(s == 200 and f['mine'] and [w['ref'] for w in f['workOrders']] == [wo['ref']], "the field view shows my crew's work today")
+    s, f = works.call('GET', f'/{A}/field?date={tomorrow}')
+    ok({w['ref'] for w in f['workOrders']} == {wo['ref'], wo_near['ref']}, "tomorrow's field view includes unfinished work from today")
+    s, mp = works.call('GET', f'/{A}/dispatch/map')
+    pts = {x['ref']: x for x in mp['located']}
+    ok(near1['ref'] in pts and pts[near1['ref']]['located_by'] == 'gps' and pts[near1['ref']]['workOrders'][0]['ref'] == wo_near['ref'], 'the map places GPS reports with their work orders')
+    spot = next((x for x in mp['located'] + mp['unlocated'] if x['ref'] == nowhere['ref']), None)
+    ok(spot and spot['located_by'] in ('pending', 'not_found', 'geocoded') and 'TST-1002' not in pts, 'typed addresses are geocoded or listed without a location')
+
+    s, r = works.call('PATCH', f"/{A}/work-orders/{wo['id']}", {'status': 'done'})
+    ok(s == 400, 'a job needs a photo or a note to be marked done')
+    s, r = works.call('PATCH', f"/{A}/work-orders/{wo['id']}", {'status': 'in_progress', 'labor_hours': 1.5})
+    ok(s == 200 and r['workOrder']['status'] == 'in_progress' and r['workOrder']['labor_hours'] == 1.5, 'crews start a job')
+    s, r = upload_photo(works, f"/{A}/work-orders/{wo['id']}/photos", 'after')
+    ok(s == 201 and r['workOrder']['photo_list'][0]['kind'] == 'after', 'crews add an after photo')
+    photo = r['workOrder']['photo_list'][0]['id']
+    s, r = works.call('PATCH', f"/{A}/work-orders/{wo['id']}", {'status': 'done'})
+    s2, t = anon.call('GET', f'/{A}/track/TST-1001')
+    ok(s == 200 and t['status'] == 'resolved' and t['updates'][-1]['note'].startswith('Completed'), 'finishing the only job resolves the request, and residents see "completed"')
+    s, ctype, data = raw(viewer, 'GET', f"/{A}/work-orders/{wo['id']}/photos/{photo}")
+    ok(s == 200 and ctype == 'image/png' and data[:4] == b'\x89PNG', 'staff see the crew photos')
+    s, _, _ = raw(editor, 'GET', f"/{A}/work-orders/{wo['id']}/photos/{photo}")
+    ok(s == 403, "roles without the dispatch board can't see crew photos")
+
+    s, r = works.call('PATCH', f"/{A}/work-orders/{wo_near['id']}", {'scheduled_date': later})
+    s2, t = anon.call('GET', f"/{A}/track/{near1['ref']}")
+    ok(t['scheduled_for'] == later and t['updates'][-1]['note'].startswith('Rescheduled for'), 'residents see a new date when work is rescheduled')
+    s, r = admin.call('POST', f'/{A}/work-orders', {'request_id': water['id'], 'crew_id': wcrew['id'], 'scheduled_date': b['today'], 'title': 'Dig and repair'})
+    first = r['workOrder']
+    s, r = admin.call('POST', f'/{A}/work-orders', {'request_id': water['id'], 'crew_id': wcrew['id'], 'scheduled_date': later, 'title': 'Restore pavement'})
+    second = r['workOrder']
+    admin.call('PATCH', f"/{A}/work-orders/{first['id']}", {'status': 'done', 'completion_note': 'Replaced 4 ft of service line'})
+    s, t = anon.call('GET', f'/{A}/track/TST-1002')
+    ok(t['status'] == 'in_progress', 'a request with unfinished work orders stays in progress')
+    admin.call('PATCH', f"/{A}/work-orders/{second['id']}", {'status': 'done', 'completion_note': 'Patched'})
+    s, t = anon.call('GET', f'/{A}/track/TST-1002')
+    ok(t['status'] == 'resolved', 'the request is resolved when all of its work orders are done')
+    s, r = works.call('GET', f"/{A}/work-orders?request_id={water['id']}")
+    ok(s == 404, "department staff can't open another department's work orders")
+
     # Knowledge base.
     s, r = editor.call('POST', f'/{A}/documents', {'title': 'When does the Board of Aldermen meet?', 'category': 'FAQs', 'authority': 'staff-note',
                                                     'text': '# Board meetings\n\nThe Board of Aldermen meets the first and third Tuesday of each month at 6 pm at City Hall.'})
@@ -124,6 +281,142 @@ try:
     ok(s == 403, "editor can't change settings")
     s, _ = editor.call('POST', f'/{A}/staff', {'name': 'X'})
     ok(s == 403, "editor can't manage staff")
+
+    # Public records requests (Mississippi rules: 7 working days, 14 with a written explanation).
+    s, rs = admin.call('GET', f'/{A}/records/settings')
+    ok(s == 200 and rs['statute'] == 'Miss. Code Ann. § 25-61-5' and rs['responseDays'] == 7 and rs['extensionDays'] == 14 and rs['confirmed'],
+       'Mississippi cities start with the Public Records Act deadline')
+    s, a = anon.call('POST', f'/{A}/records/assist', {'records': 'all emails'})
+    ok(s == 200 and not a['clear'] and len(a['questions']) >= 2, 'vague records requests get narrowing questions')
+    s, a = anon.call('POST', f'/{A}/records/assist', {'records': 'Minutes of Board of Aldermen meetings about the water tower', 'date_from': '2025-01-01', 'date_to': '2025-06-30'})
+    ok(s == 200 and a['clear'], 'specific records requests pass the scope check')
+    s, _ = anon.call('POST', f'/{A}/records', {'records': 'Water tower contracts', 'name': 'No Contact'})
+    ok(s == 400, 'records requests need a way to reach the requester')
+    s, pr = anon.call('POST', f'/{A}/records', {'records': 'Minutes and contracts about the water tower repairs', 'date_from': '2025-01-01', 'date_to': '2025-12-31',
+                                                 'format': 'electronic', 'name': 'Rhonda Requester', 'email': 'rhonda@example.test', 'phone': '555-0142'})
+    ok(s == 201 and pr.get('ref') == 'TST-PRR-1001' and pr.get('key') and '/records?city=' in pr.get('trackUrl', ''), f"records requests are numbered TST-PRR-1001 ({pr.get('ref')})")
+    s, t = anon.call('GET', f'/{A}/records/track/TST-PRR-1001')
+    ok(s == 200 and t['status'] == 'new' and 'records' not in t and 'letters' not in t and t['due_date'] == pr['due'], 'tracking by number alone shows status and due date only')
+    s, t = anon.call('GET', f"/{A}/records/track/TST-PRR-1001?key={pr['key']}")
+    ok(s == 200 and t['verified'] and t['records'].startswith('Minutes'), "the requester's private link shows the full request")
+    s, _ = anon.call('GET', f'/{B}/records/track/TST-PRR-1001')
+    ok(s == 404, "one city's records requests don't resolve in another")
+
+    # Deadlines count working days and skip weekends and Mississippi holidays (Memorial Day, Confederate Memorial Day).
+    def log_request(who, received, **extra):
+        return who.call('POST', f'/{A}/records', {'records': 'Police incident reports for 100 Pine Street', 'name': 'Mail Requester', 'address': '1 Main St',
+                                                   'source': 'mail', 'received': received, **extra})
+    s, m1 = log_request(editor, '2026-05-22')
+    ok(s == 201 and m1['due'] == '2026-06-03', f"7 working days from Fri 2026-05-22 skip Memorial Day: due {m1.get('due')}")
+    s, m2 = log_request(editor, '2026-04-24')
+    ok(m2.get('due') == '2026-05-06', f"Confederate Memorial Day is not a working day: due {m2.get('due')}")
+    s, _ = log_request(editor, '2099-01-05')
+    ok(s == 400, "a request can't be dated in the future")
+    s, _ = works.call('GET', f'/{A}/records')
+    ok(s == 403, "department staff don't see records requests")
+    s, r = viewer.call('GET', f'/{A}/records')
+    row = next(x for x in r['requests'] if x['ref'] == 'TST-PRR-1001')
+    ok(s == 200 and row['name'] == 'Hidden' and row['email'] == 'Hidden', 'viewers see the queue without requester contact details')
+    s, _ = viewer.call('PATCH', f"/{A}/records/{row['id']}", {'status': 'in_progress'})
+    ok(s == 403, "viewers can't work records requests")
+    s, r = editor.call('GET', f'/{A}/records')
+    mail = next(x for x in r['requests'] if x['ref'] == m1['ref'])
+    ok(mail['deadline']['state'] == 'overdue' and mail['deadline']['left'] < 0, 'requests past their due date show as overdue')
+    s, _ = editor.call('POST', f"/{A}/records/{mail['id']}/extend", {'reason': 'Too short'})
+    ok(s == 400, 'an extension needs a written explanation')
+    s, _ = editor.call('POST', f"/{A}/records/{mail['id']}/extend", {'reason': 'The reports are archived off site and must be reviewed for exempt information.', 'due': '2026-07-30'})
+    ok(s == 400, 'extending past 14 working days needs the requester to agree')
+    s, r = editor.call('POST', f"/{A}/records/{mail['id']}/extend", {'reason': 'The reports are archived off site and must be reviewed for exempt information.'})
+    ok(s == 200 and r['request']['extended_due'] == '2026-06-12' and any(l['kind'] == 'extension' and l['status'] == 'sent' for l in r['letters']),
+       'extensions default to 14 working days from receipt and send the written explanation')
+
+    # Working a request: assign, AI suggestions, files with redaction checks, fees, letters, release.
+    rid = row['id']
+    s, r = editor.call('PATCH', f'/{A}/records/{rid}', {'assignee_id': admin_staff['id'], 'status': 'in_progress', 'note': 'Check with Public Works'})
+    ok(s == 200 and r['request']['assignee'] == 'Avery Admin' and r['request']['status'] == 'in_progress', 'knowledge editors (the clerk\'s office) work records requests')
+    s, r = anon.call('GET', f"/{A}/records/track/TST-PRR-1001?key={pr['key']}")
+    ok(not any('Public Works' in (u['note'] or '') for u in r['updates']), 'staff notes stay off the tracking page')
+    s, r = editor.call('POST', f'/{A}/documents', {'title': 'Water tower repair contract 2025', 'category': 'Budget & Finance', 'visibility': 'internal',
+                                                    'text': '# Water tower repair contract\n\nThe Board of Aldermen approved the water tower repair contract with Gulf Tank Co. '
+                                                            'on March 4, 2025. Vendor contact: 601-555-0188, billing@gulftank.example. Account number: 4400123987.'})
+    tower = r['documents'][0]
+    s, r = editor.call('POST', f'/{A}/records/{rid}/find')
+    sug = next((x for x in r.get('suggestions', []) if x['payload']['docId'] == tower['id']), None)
+    ok(s == 200 and sug and sug['status'] == 'pending', 'the AI suggests likely responsive documents from the knowledge base')
+    s, r = editor.call('POST', f"/{A}/records/{rid}/suggestions/{sug['id']}", {'decision': 'accepted'})
+    kb = next((f for f in r.get('files', []) if f['doc_id'] == tower['id']), None)
+    labels = {x['label'] for x in (kb or {}).get('flags', [])}
+    ok(s == 200 and kb and kb['status'] == 'review' and {'Email address', 'Phone number', 'Account or routing number', 'Staff-only document in the knowledge base'} <= labels,
+       f'accepted suggestions become files flagged for redaction review ({sorted(labels)})')
+    s, _ = editor.call('PATCH', f"/{A}/records/{rid}/files/{kb['id']}", {'status': 'approved'})
+    ok(s == 400, "a file can't be approved until every possible redaction is resolved")
+    editor.call('PATCH', f"/{A}/records/{rid}/files/{kb['id']}", {'status': 'withheld'})
+    s, r = upload_file(editor, f'/{A}/records/{rid}/files', 'tower-minutes.txt',
+                  b'Minutes, March 4 2025. The board approved the water tower contract. Resident John Doe, SSN 123-45-6789, spoke in favor.')
+    up = next((f for f in r.get('files', []) if f['name'] == 'tower-minutes.txt'), None)
+    ok(s == 200 and up and any(x['label'] == 'Social Security number' and '6789' in x['examples'][0] and '123-45' not in x['examples'][0] for x in up['flags']),
+       'uploaded files are checked for Social Security numbers, shown masked')
+    s, r = editor.call('PATCH', f"/{A}/records/{rid}/files/{up['id']}", {'status': 'approved', 'flags': ['redacted' for _ in up['flags']]})
+    ok(s == 200 and next(f for f in r['files'] if f['id'] == up['id'])['status'] == 'approved', 'staff resolve the redactions and approve the file')
+
+    s, _ = editor.call('PUT', f'/{A}/records/settings', {'fees': {'searchHourly': 20}})
+    ok(s == 403, "only administrators change the records rules and fee schedule")
+    s, rs = admin.call('PUT', f'/{A}/records/settings', {'fees': {'searchHourly': 20, 'perPage': 0.25}, 'closures': ['2026-12-24']})
+    ok(s == 200 and rs['fees']['searchHourly'] == 20 and rs['closures'] == ['2026-12-24'], 'administrators set the fee schedule and closure days')
+    s, r = editor.call('POST', f'/{A}/records/{rid}/fee', {'searchHours': 1.5, 'pages': 10})
+    fee_letter = next((l for l in r.get('letters', []) if l['kind'] == 'fee_estimate'), None)
+    ok(s == 200 and r['request']['fee_cents'] == 3250 and r['request']['fee_status'] == 'estimated' and fee_letter and '$32.50' in fee_letter['body'],
+       'fees are the actual cost: 1.5 hours search at $20 plus 10 pages at $0.25 = $32.50')
+    s, _ = editor.call('POST', f"/{A}/records/{rid}/letters/{fee_letter['id']}/send")
+    ok(s == 400, 'letters must be approved before they are sent')
+    editor.call('PATCH', f"/{A}/records/{rid}/letters/{fee_letter['id']}", {'status': 'approved'})
+    s, r = editor.call('POST', f"/{A}/records/{rid}/letters/{fee_letter['id']}/send")
+    ok(s == 200 and r['request']['fee_status'] == 'requested' and r['request']['status'] == 'awaiting_payment', 'sending the fee letter requests payment')
+
+    s, r = editor.call('POST', f'/{A}/records/{rid}/draft', {'kind': 'response'})
+    resp = next((l for l in r.get('letters', []) if l['kind'] == 'response'), None)
+    ok(s == 200 and resp and resp['status'] == 'draft' and 'TST-PRR-1001' in resp['body'], 'the assistant drafts the response letter for staff review')
+    s, r = editor.call('POST', f'/{A}/records/{rid}/release', {'outcome': 'fulfilled', 'letterId': resp['id']})
+    ok(s == 400 and 'letter' in r.get('error', ''), 'records are not released until the response letter is approved')
+    editor.call('PATCH', f"/{A}/records/{rid}/letters/{resp['id']}", {'status': 'approved'})
+    s, r = editor.call('POST', f'/{A}/records/{rid}/release', {'outcome': 'fulfilled', 'letterId': resp['id']})
+    ok(s == 400 and 'payment' in r.get('error', ''), 'records are not released before the fee is paid')
+    s, r = editor.call('POST', f'/{A}/records/{rid}/fee', {'action': 'paid', 'amount': '32.50', 'note': 'Check 1042'})
+    ok(s == 200 and r['request']['fee_status'] == 'paid' and r['request']['status'] == 'in_progress', 'staff record the payment')
+    s, r = editor.call('POST', f'/{A}/records/{rid}/release', {'outcome': 'fulfilled', 'letterId': resp['id']})
+    ok(s == 200 and r['request']['status'] == 'closed' and r['request']['outcome'] == 'fulfilled', 'staff release the approved records and close the request')
+    s, t = anon.call('GET', f"/{A}/records/track/TST-PRR-1001?key={pr['key']}")
+    ok([f['name'] for f in t['files']] == ['tower-minutes.txt'] and any(l['subject'] == resp['subject'] for l in t['letters']),
+       'the requester sees only the released file and the letters sent to them')
+    s, body, _ = raw_get(anon, f"/{A}/records/download/TST-PRR-1001/{up['id']}?key={pr['key']}")
+    ok(s == 200 and b'water tower contract' in body, 'the requester downloads released files with their link')
+    s, _, _ = raw_get(anon, f"/{A}/records/download/TST-PRR-1001/{up['id']}")
+    ok(s == 404, 'downloads need the private link')
+    s, _, _ = raw_get(anon, f"/{A}/records/download/TST-PRR-1001/{kb['id']}?key={pr['key']}")
+    ok(s == 404, 'withheld files are never downloadable')
+    s, _ = upload_file(editor, f'/{A}/records/{rid}/files', 'late.txt', b'Added after closing, should be refused.')
+    ok(s == 400, 'closed requests take no more files')
+
+    # Denials cite the exemption, in writing.
+    did = mail['id']
+    s, r = editor.call('POST', f'/{A}/records/{did}/draft', {'kind': 'denial', 'exemptions': ['Miss. Code Ann. § 25-61-12: law enforcement investigative records'], 'reason': 'The investigation is open.'})
+    den = next(l for l in r['letters'] if l['kind'] == 'denial')
+    ok('25-61-12' in den['body'], 'denial letters cite the exemption')
+    editor.call('PATCH', f"/{A}/records/{did}/letters/{den['id']}", {'status': 'approved'})
+    s, _ = editor.call('POST', f'/{A}/records/{did}/release', {'outcome': 'denied', 'letterId': den['id']})
+    ok(s == 400, 'a denial must cite the specific exemption')
+    s, r = editor.call('POST', f'/{A}/records/{did}/release', {'outcome': 'denied', 'letterId': den['id'], 'exemptions': ['Miss. Code Ann. § 25-61-12: law enforcement investigative records']})
+    ok(s == 200 and r['request']['outcome'] == 'denied' and r['request']['exemptions'], 'denials are recorded with the cited exemption')
+
+    s, csv, headers = raw_get(editor, f'/{A}/records/export')
+    ok(s == 200 and b'TST-PRR-1001' in csv and b'denied' in csv and 'text/csv' in headers.get('Content-Type', ''), 'the records log exports as CSV with outcomes')
+    s, r = admin.call('GET', f'/{A}/audit?type=records_request')
+    acts = {e['action'] for e in r['events']}
+    for act in ['records.create', 'records.update', 'records.extend', 'records.suggestion_accepted', 'records.file_add', 'records.file_review',
+                'records.fee_estimated', 'records.fee_requested', 'records.fee_paid', 'records.letter_sent', 'records.close', 'records.export']:
+        ok(act in acts, f'audit log records {act}')
+    e = next(e for e in r['events'] if e['action'] == 'records.fee_paid')
+    ok(e['actor_name'] == 'Eddie Editor' and e['changes']['fee_status'] == ['requested', 'paid'], 'records audit entries carry before and after values')
 
     # Managing access.
     s, _ = admin.call('PATCH', f"/{A}/staff/{admin_staff['id']}", {'role': 'viewer'})
@@ -318,20 +611,394 @@ try:
         ok({'sms', 'voice'} <= {c['channel'] for c in r['conversations']}, 'texts and calls are logged as conversations')
     else:
         print(f'SKIP text and phone checks (webhooks answered {s}: {body[:60]})')
+    text, done = chat(A, 'How do I make a public records request for police reports?')
+    ok(done['flags'].get('offerRecords') and 'Request public records' in text, 'asking for public records in the chat offers the records request')
+
+    # Business licenses (Miss. Code Ann. § 27-17).
+    def raw(method, path, who=None):
+        req = urllib.request.Request(f'{ORIGIN}/api{path}', method=method, headers={'User-Agent': 'CityHallOS-scripts/1.0'})
+        try:
+            with (who.opener if who else urllib.request.build_opener()).open(req, timeout=60) as res:
+                return res.status, res.headers.get('Content-Type', ''), res.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.headers.get('Content-Type', ''), e.read()
+    today = datetime.date.today()
+    s, r = clerk.call('GET', f'/{A}/licenses/settings')
+    ok(s == 200 and not r['configured'] and r['stateSchedule'], 'licensing clerk opens license settings, with the state schedule as a template')
+    schedule = r['stateSchedule']
+    s, _ = clerk.call('PUT', f'/{A}/licenses/settings', {'classes': schedule})
+    ok(s == 403, "only administrators change license fees")
+    s, r = admin.call('PUT', f'/{A}/licenses/settings', {'classes': schedule, 'officerName': 'Cleo Clerk', 'officerTitle': 'City Clerk',
+                                                         'requirements': 'Bring a photo ID.', 'homeRules': 'No retail traffic in residential zones.'})
+    ok(s == 200 and r['configured'] and len(r['config']['classes']) == 3, 'admins set license classes and fees')
+    s, info = anon.call('GET', f'/{A}/licenses/info')
+    general = next(c for c in info['classes'] if c['key'] == 'general')
+    ok(s == 200 and '$20.00' in general['fee'] and info['requirements'] == 'Bring a photo ID.', 'residents see the classes and fees the city set')
+    s, _ = works.call('GET', f'/{A}/licenses/applications')
+    ok(s == 403, "staff of other departments can't work licenses")
+
+    # Guided intake: answer only what's asked; nothing already given is asked again.
+    answers = {'kind': 'new', 'class_key': 'General business', 'entity_type': 'skip', 'location': '12 Pine St',
+               'inside_limits': 'yes', 'home_based': 'yes', 'home_customers': 'no', 'home_workers': 'no', 'home_outside': 'no', 'employees': 'just me',
+               'start_date': 'skip', 'sos_id': 'none', 'dor_account': 'applied', 'state_licenses': 'health department food permit',
+               'phone': '601-555-0142', 'email': 'skip'}
+    draft = {'business_name': 'Sweet Treats Bakery', 'description': 'Home bakery selling cakes', 'owner_name': 'Jane Baker'}
+    asked, step = [], {'ask': True}
+    s, step = anon.call('POST', f'/{A}/licenses/intake', {'draft': draft})
+    ok(s == 200 and step['intro'] and 'approve' in step['intro'], 'intake starts by explaining that City Hall staff decide')
+    for _ in range(25):
+        if not step.get('ask'): break
+        f = step['ask']['field']
+        asked.append(f)
+        s, step = anon.call('POST', f'/{A}/licenses/intake', {'draft': step['draft'], 'field': f, 'answer': answers.get(f, 'skip')})
+    ok(step.get('ready') and not {'business_name', 'description', 'owner_name'} & set(asked), f'intake asks only for what is missing ({len(asked)} questions)')
+    ok(len(asked) == len(set(asked)), 'intake never asks the same question twice')
+    ok(any('City Hall confirms' in n for n in step['notes']) or any(r[0] == 'License class' for r in step['review']['rows']), 'intake shows the fee estimate from the city schedule')
+    s, r = anon.call('POST', f'/{A}/licenses/intake', {'draft': {'kind': 'new'}, 'field': 'inside_limits', 'answer': 'no, out in the county'})
+    ok(any('Test County' in n for n in r['notes']), 'outside city limits, intake explains the county issues the license')
+    s, r = anon.call('POST', f'/{A}/licenses/applications', {'draft': {'business_name': 'Nope'}})
+    ok(s == 400, 'incomplete applications are refused')
+    s, sub = anon.call('POST', f'/{A}/licenses/applications', {'draft': step['draft']})
+    ok(s == 201 and sub['ref'] == 'TST-BL-1001' and f'ref={sub["ref"]}' in sub['trackUrl'], f"a city's first application is TST-BL-1001 ({sub.get('ref')})")
+    s, t = anon.call('GET', f'/{A}/licenses/track/tst-bl-1001')
+    ok(s == 200 and t['status'] == 'submitted' and 'phone' not in t, 'tracking shows status without contact details')
+
+    # Staff review queue.
+    s, r = clerk.call('GET', f'/{A}/licenses/applications?status=open')
+    app_id = r['applications'][0]['id']
+    ok(s == 200 and r['applications'][0]['class_label'] == 'General business', 'the licensing clerk sees the application in the queue')
+    s, r = editor.call('GET', f'/{A}/licenses/applications/{app_id}')
+    ok(s == 200 and r['application']['phone'] == 'Hidden', 'roles without contact access see applications with contact details hidden')
+    s, _ = editor.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'review'})
+    ok(s == 403, "knowledge editors can't work license applications")
+    clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'review'})
+    s, r = clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'request_info', 'message': 'Please send a copy of your health department permit.'})
+    ok(s == 200 and r['application']['status'] == 'needs_info', 'staff ask the applicant for missing information')
+    s, t = anon.call('GET', f'/{A}/licenses/track/TST-BL-1001')
+    ok(t['status'] == 'needs_info' and any('health department permit' in (u['note'] or '') for u in t['updates']), 'the applicant sees what is missing')
+    s, r = anon.call('POST', f'/{A}/licenses/track/TST-BL-1001/reply', {'message': 'Permit number HD-2291, copy dropped off today.'})
+    ok(s == 200 and r['status'] == 'in_review', 'the applicant replies and the application goes back to review')
+    s, r = clerk.call('GET', f'/{A}/licenses/applications/{app_id}')
+    sug = r['application']['suggested']
+    ok(sug['total_cents'] > 0 and sug['period']['end'].endswith('-09-30'), f"fee suggested from the schedule ({sug['total_cents']} cents, through {sug['period']['end']})")
+    ok(any('notified' in (h['note'] or '') for h in r['application']['history']), 'the timeline says whether the applicant was notified')
+    s, _ = clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'payment', 'method': 'cash', 'amount_cents': 2000})
+    ok(s == 400, "payment can't be recorded before the fee is assessed")
+    s, r = clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'assess', 'lines': sug['lines']})
+    fee = r['application']['fee_cents']
+    ok(s == 200 and r['application']['status'] == 'awaiting_payment' and fee == sug['total_cents'], 'staff assess the fee')
+    s, t = anon.call('GET', f'/{A}/licenses/track/TST-BL-1001')
+    ok(t['fee_cents'] == fee and 'cash or check' in t['next'], 'the applicant sees the fee and how to pay')
+    s, _ = clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'payment', 'method': 'cash', 'amount_cents': fee - 1})
+    ok(s == 400, 'a payment that does not match the fee is refused')
+    s, _ = clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'payment', 'method': 'check', 'amount_cents': fee})
+    ok(s == 400, 'a check payment needs the check number')
+    s, _ = clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'issue'})
+    ok(s == 400, "a license can't be issued before payment")
+    s, r = clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'payment', 'method': 'check', 'check_number': '1043', 'receipt_no': 'R-77', 'amount_cents': fee})
+    ok(s == 200 and r['application']['status'] == 'paid', 'staff record a check payment at the counter')
+    s, r = clerk.call('PATCH', f'/{A}/licenses/applications/{app_id}', {'action': 'issue'})
+    lic = r['application']['license']
+    ok(s == 200 and r['application']['status'] == 'issued' and lic['number'] == 'TST-LIC-1001' and lic['status'] == 'active', 'staff issue license TST-LIC-1001')
+    s, t = anon.call('GET', f'/{A}/licenses/track/TST-BL-1001')
+    ok(t['status'] == 'issued' and t['certificate'] and t['license']['number'] == 'TST-LIC-1001', 'the applicant sees the license on the tracking page')
+    s, ct, body = raw('GET', f'/{A}/licenses/track/TST-BL-1001/certificate')
+    ok(s == 200 and ct == 'application/pdf' and body[:5] == b'%PDF-', f'the applicant downloads the license certificate PDF ({len(body)} bytes)')
+    s, ct, body = raw('GET', f"/{A}/licenses/registry/{lic['id']}/certificate", clerk)
+    ok(s == 200 and body[:5] == b'%PDF-', 'staff print the certificate from the registry')
+    s, r = anon.call('GET', f'/{A}/licenses/lookup?q=sweet')
+    hit = r['results'][0] if r.get('results') else {}
+    ok(hit.get('status') == 'active' and 'Pine' not in hit.get('location', '') and 'phone' not in hit, 'public lookup shows the license, without a home address or contact details')
+    s, r = anon.call('GET', f'/{B}/licenses/lookup?q=sweet')
+    ok(s == 200 and not r['results'], "another city's lookup can't find it")
+
+    # Paying by card when sending the application. No processor is connected, so payments run in test mode.
+    paid_draft = dict(step['draft'], business_name='Pine Cone Candles')
+    s, r = anon.call('POST', f'/{A}/licenses/intake', {'draft': paid_draft, 'field': 'email', 'answer': 'candles@example.test'})
+    pay_now = (r.get('review') or {}).get('payNow') or {}
+    ok(s == 200 and r['ready'] and pay_now.get('cents', 0) > 0 and r['payments']['testMode'], f"the review shows the fee due now from the city's schedule ({pay_now.get('cents')} cents)")
+    paid_draft = r['draft']
+    card = {'name': 'Jane Baker', 'number': '4242 4242 4242 4242', 'exp': '12/30', 'cvc': '123', 'zip': '39577'}
+    s, r = anon.call('POST', f'/{A}/licenses/applications', {'draft': paid_draft, 'payment': {**card, 'number': '4000 0000 0000 0002'}})
+    ok(s == 402 and 'declined' in r['error'], 'a declined card is refused')
+    s, r = anon.call('POST', f'/{A}/licenses/applications', {'draft': paid_draft, 'payment': {**card, 'number': '4111 1111 1111 1111'}})
+    ok(s == 402 and 'test mode' in r['error'], 'in test mode a real card number is never charged')
+    s, r = anon.call('POST', f'/{A}/licenses/applications', {'draft': paid_draft, 'payment': card, 'expectCents': pay_now.get('cents', 0) + 1})
+    ok(s == 409, 'the amount charged is the fee the server works out, not one sent by the browser')
+    s, paid = anon.call('POST', f'/{A}/licenses/applications', {'draft': paid_draft, 'payment': card, 'expectCents': pay_now.get('cents')})
+    ok(s == 201 and paid['paid']['amount_cents'] == pay_now['cents'] and paid['paid']['last4'] == '4242', 'applicants pay by card when they send the application')
+    s, t = anon.call('GET', f"/{A}/licenses/track/{paid['ref']}")
+    ok(t['paid_cents'] == pay_now['cents'] and '4242 4242' not in json.dumps(t) and any('ending 4242' in (u['note'] or '') for u in t['updates']),
+       'tracking shows the payment and never the card number')
+    s, r = clerk.call('GET', f"/{A}/licenses/applications?q={paid['ref']}")
+    pid = r['applications'][0]['id']
+    s, r = clerk.call('PATCH', f'/{A}/licenses/applications/{pid}', {'action': 'assess', 'lines': [{'label': 'Corrected fee', 'cents': pay_now['cents'] + 1000}]})
+    ok(s == 200 and r['application']['status'] == 'awaiting_payment', 'when staff raise the fee, the difference is due')
+    s, t = anon.call('GET', f"/{A}/licenses/track/{paid['ref']}")
+    ok(t['canPay'] and t['balance_cents'] == 1000, 'the applicant sees the balance due and can pay it online')
+    s, r = anon.call('POST', f"/{A}/licenses/track/{paid['ref']}/pay", {'card': card, 'expectCents': 1000})
+    ok(s == 200 and r['paid']['amount_cents'] == 1000, 'the applicant pays the balance from the tracking page')
+    s, r = clerk.call('PATCH', f'/{A}/licenses/applications/{pid}', {'action': 'issue'})
+    ok(s == 200 and r['application']['status'] == 'issued', 'a license paid online is issued')
+    s, paid2 = anon.call('POST', f'/{A}/licenses/applications', {'draft': dict(paid_draft, business_name='Short Lived LLC'), 'payment': card})
+    s, r = clerk.call('GET', f"/{A}/licenses/applications?q={paid2['ref']}")
+    s, r = clerk.call('PATCH', f"/{A}/licenses/applications/{r['applications'][0]['id']}", {'action': 'deny', 'reason': 'Zoning does not allow this use.'})
+    ok(s == 200 and r['application']['refunded_cents'] == pay_now['cents'], 'denying an application paid by card refunds the payment')
+
+    # Denials need a reason, which the applicant sees.
+    s, sub2 = anon.call('POST', f'/{A}/licenses/applications', {'draft': {'kind': 'new', 'business_name': 'Late Night Fireworks', 'owner_name': 'Sam Spark',
+                                                                          'location': '1 Hwy 49', 'inside_limits': 'yes', 'employees': 2, 'email': 'sam@example.test'}})
+    s, r = clerk.call('GET', f'/{A}/licenses/applications?q=fireworks')
+    id2 = r['applications'][0]['id']
+    s, _ = clerk.call('PATCH', f'/{A}/licenses/applications/{id2}', {'action': 'deny'})
+    ok(s == 400, 'denying needs a reason')
+    s, r = clerk.call('PATCH', f'/{A}/licenses/applications/{id2}', {'action': 'deny', 'reason': 'Fireworks sales are not allowed at this location.'})
+    s, t = anon.call('GET', f"/{A}/licenses/track/{sub2['ref']}")
+    ok(t['status'] == 'denied' and 'not allowed' in t['decision_reason'], 'denied applicants see the reason')
+
+    # The registry: earlier licenses, renewals with late penalties, renewal notices, revocation.
+    lapsed_on = (today - datetime.timedelta(days=40)).isoformat()
+    s, r = clerk.call('POST', f'/{A}/licenses/registry', {'number': 'TST-LIC-0042', 'business_name': 'Pine Street Hardware', 'owner_name': 'Hal Hammer', 'class_key': 'general',
+                                                          'location': '200 Pine St', 'email': 'hal@example.test', 'issued_on': (today - datetime.timedelta(days=400)).isoformat(), 'expires_on': lapsed_on})
+    old = r.get('license', {})
+    ok(s == 201 and old.get('status') == 'expired', 'staff add an earlier license from the paper register, and it shows as expired')
+    s, r = anon.call('POST', f'/{A}/licenses/intake', {'draft': {}, 'message': 'I need to renew TST-LIC-0042'})
+    ok(r['draft'].get('business_name') == 'Pine Street Hardware' and (r['ask'] or {}).get('field') != 'business_name', 'renewal intake starts from the registry')
+    s, r = clerk.call('POST', f"/{A}/licenses/registry/{old['id']}/renew")
+    ok(s == 201, 'staff start a renewal at the counter')
+    s, _ = clerk.call('POST', f"/{A}/licenses/registry/{old['id']}/renew")
+    ok(s == 409, 'only one renewal can be open per license')
+    s, ed = clerk.call('PATCH', f"/{A}/licenses/applications/{r['id']}", {'action': 'edit', 'fields': {'employees': 3}})
+    ok(s == 200 and ed['application']['employees'] == 3, 'staff correct details on an application')
+    s, ren = clerk.call('GET', f"/{A}/licenses/applications/{r['id']}")
+    ok(any(l.get('penalty') for l in ren['application']['suggested']['lines']), 'a lapsed renewal is offered the § 27-17-467 late penalty')
+    s, r = operator.call('POST', f'/{A}/licenses/notices', {'asOf': f'{int(sug["period"]["end"][:4])}-08-01'})
+    ok(s == 200 and r['renewal'] >= 1 and r['notSent'] >= 1, f"renewal notices come due on the first of the month before expiry ({r.get('renewal')} due)")
+    s, r = operator.call('POST', f'/{A}/licenses/notices', {'asOf': f'{int(sug["period"]["end"][:4])}-08-01'})
+    ok(s == 200 and r['renewal'] == 0, 'each renewal notice goes out once')
+    s, r = clerk.call('GET', f'/{A}/licenses/registry?status=active')
+    first = next((l for l in r['licenses'] if l['number'] == 'TST-LIC-1001'), {})
+    ok('not sent' in (first.get('reminder_result') or ''), 'the registry shows the notice and that messaging is not connected')
+    s, _ = clerk.call('PATCH', f"/{A}/licenses/registry/{lic['id']}", {'action': 'revoke'})
+    ok(s == 400, 'revoking needs a reason')
+    s, r = clerk.call('PATCH', f"/{A}/licenses/registry/{lic['id']}", {'action': 'revoke', 'reason': 'Closed the business'})
+    s, look = anon.call('GET', f'/{A}/licenses/lookup?q=TST-LIC-1001')
+    ok(look['results'][0]['status'] == 'revoked', 'revoked licenses show as revoked in the lookup')
+    s, _, _ = raw('GET', f'/{A}/licenses/track/TST-BL-1001/certificate')
+    ok(s == 404, 'a revoked license has no downloadable certificate')
+    s, r = clerk.call('PATCH', f"/{A}/licenses/registry/{lic['id']}", {'action': 'reinstate', 'reason': 'Reopened'})
+    ok(s == 200 and r['license']['status'] == 'active', 'staff reinstate a license')
+    text, done = chat(A, 'How do I get a business license to open a bakery?')
+    ok(done['flags'].get('offerLicense'), 'asking the AI City Clerk about a business license offers the application')
 
     # Audit log.
+    # Every page of the log, newest first (100 events a page).
     s, r = admin.call('GET', f'/{A}/audit')
+    events = list(r['events'])
+    while len(r['events']) == 100:
+        s, r = admin.call('GET', f"/{A}/audit?before={r['events'][-1]['id']}")
+        events += r['events']
+    r = {'events': events}
     acts = {e['action'] for e in r['events']}
+    s, lr = admin.call('GET', f'/{A}/audit?type=license')
+    for a in ['license.settings', 'license.apply', 'license.in_review', 'license.needs_info', 'license.reply', 'license.awaiting_payment', 'license.paid',
+              'license.issue', 'license.issued', 'license.denied', 'license.import', 'license.reminder', 'license.revoke', 'license.reinstate']:
+        ok(a in {e['action'] for e in lr['events']}, f'audit log records {a}')
+    e = next(e for e in lr['events'] if e['action'] == 'license.awaiting_payment' and e['entity_id'] == 'TST-BL-1001')
+    ok(e['actor_name'] == 'Cleo Clerk' and e['changes']['fee_cents'] == [None, fee], 'license audit entries name the person and the before and after values')
     for a in ['city.create', 'request.create', 'request.update', 'document.create', 'document.update', 'document.delete',
               'staff.create', 'access.role', 'access.revoke', 'access.setup_link', 'settings.update',
-              'permit.submit', 'permit.needs_info', 'permit.resubmit', 'permit.fees_due', 'permit.in_review', 'permit.issued']:
+              'permit.submit', 'permit.needs_info', 'permit.resubmit', 'permit.fees_due', 'permit.in_review', 'permit.issued',
+              'crew.create', 'crew.update', 'work_order.create', 'work_order.update', 'work_order.photo', 'dispatch.suggest', 'dispatch.accept', 'dispatch.dismiss']:
         ok(a in acts, f'audit log records {a}')
+    e = next(e for e in r['events'] if e['action'] == 'work_order.update' and (e['changes'] or {}).get('status') == ['in_progress', 'done'])
+    ok(e['actor_name'] == 'Pat Works', 'work order changes are audited with who and the before and after values')
+    ok(all(e['actor_type'] == 'ai' for e in r['events'] if e['action'] == 'dispatch.suggest'), "the dispatcher's suggestions are recorded as the AI's")
     e = next(e for e in r['events'] if e['action'] == 'document.update')
     ok(e['actor_name'] == 'Eddie Editor' and e['changes']['verification'] == ['verified_current', 'historical'], 'audit entries name the person and the before and after values')
     s, _ = works.call('GET', f'/{A}/audit')
     ok(s == 403, "department staff can't read the audit log")
     s, r = admin.call('GET', f'/{A}/export')
-    ok(s == 200 and 'audit_log' in r and len(r['requests']) >= 2, 'admins export the whole city')
+    ok(s == 200 and 'audit_log' in r and len(r['requests']) >= 2 and len(r['work_orders']) == 4, 'admins export the whole city')
+
+    # Meeting secretary: boards, agendas, notice rules, minutes, action items and publishing.
+    M = f'/{A}/meetings'
+    mviewer, _, _, _ = onboard('Mia Viewer', 'viewer', key='meetings-viewer')
+    s, _ = mviewer.call('POST', f'{M}/boards', {'name': 'Board of Aldermen'})
+    ok(s == 403, "viewers can't add boards")
+    s, r = editor.call('POST', f'{M}/boards', {'name': 'Board of Aldermen', 'schedule': 'First and third Tuesday, 6 pm', 'location': 'City Hall'})
+    ok(s == 201, 'the clerk (knowledge editor) adds a board')
+    board = r['board']['id']
+    s, _ = editor.call('POST', f'{M}/boards', {'name': 'Board of Aldermen'})
+    ok(s == 409, 'board names are unique')
+    for name, seat, role, voting in [('Jane Carter', 'Mayor', 'presiding', False), ('Tom Reed', 'Ward 1', 'member', True),
+                                     ('Lisa Grant', 'Ward 2', 'member', True), ('Sam Ortiz', 'Ward 3', 'member', True)]:
+        editor.call('POST', f'{M}/boards/{board}/members', {'name': name, 'seat': seat, 'role': role, 'voting': voting})
+    s, r = mviewer.call('GET', f'{M}/boards')
+    ok(s == 200 and len(r['boards'][0]['members']) == 4, 'everyone with dashboard access sees boards and members')
+
+    import datetime
+    day = lambda n: (datetime.date.today() + datetime.timedelta(days=n)).isoformat()
+    s, r = editor.call('POST', M, {'board_id': board, 'kind': 'regular', 'starts_at': f'{day(10)}T18:00'})
+    ok(s == 201 and r['meeting']['location'] == 'City Hall', "a meeting defaults to the board's usual place")
+    future = r['meeting']['id']
+    s, r = editor.call('POST', M, {'board_id': board, 'kind': 'regular', 'starts_at': f'{day(1)}T18:00'})
+    soon = r['meeting']['id']
+    s, r = editor.call('POST', M, {'board_id': board, 'kind': 'special', 'starts_at': f'{day(2)}T17:00'})
+    special = r['meeting']['id']
+    s, r = editor.call('GET', f'{M}/{special}')
+    ok(any(w['code'] == 'no_subject' for w in r['warnings']), 'special meetings without a stated subject are flagged (Miss. Code Ann. 25-41-13)')
+    ok(r['rules']['postWithinHours'] == 1 and r['rules']['minutesDays'] == 30, 'Mississippi cities get the Open Meetings Act defaults')
+
+    s, r = works.call('POST', f'{M}/{future}/items', {'title': 'Pine Street paving bids', 'type': 'action', 'presenter': 'Pat Works',
+                                                      'recommended_action': 'Award to Gulf Coast Paving for $184,000'})
+    ok(s == 201 and r['item']['status'] == 'submitted', 'department staff submit agenda items for the clerk')
+    paving = r['item']['id']
+    s, _ = works.call('PATCH', f'{M}/{future}/items/{paving}', {'status': 'accepted'})
+    ok(s == 403, "department staff can't put their own item on the agenda")
+    s, _ = mviewer.call('POST', f'{M}/{future}/items', {'title': 'Nope'})
+    ok(s == 403, "viewers can't submit agenda items")
+    boundary = 'chos' + RUN
+    payload = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="bid-tabulation.txt"\r\nContent-Type: text/plain\r\n\r\n'
+               f'Gulf Coast Paving $184,000\r\n--{boundary}--\r\n').encode()
+    req = urllib.request.Request(f'{ORIGIN}/api{M}/{future}/items/{paving}/files', data=payload, method='POST',
+                                 headers={'Content-Type': f'multipart/form-data; boundary={boundary}', 'User-Agent': 'CityHallOS-scripts/1.0'})
+    with works.opener.open(req) as res:
+        attachment = json.loads(res.read())['files'][0]['id']
+    ok(bool(attachment), 'the submitter attaches a file to their item')
+    s, _ = anon.call('GET', f'{M}/files/{attachment}')
+    ok(s == 404, 'attachments stay private until the agenda is published')
+    editor.call('PATCH', f'{M}/{future}/items/{paving}', {'status': 'accepted'})
+    s, r = editor.call('POST', f'{M}/{future}/items', {'title': 'Approval of the minutes', 'type': 'consent'})
+    ok(r['item']['status'] == 'accepted', "the clerk's own items go straight onto the agenda")
+    consent = r['item']['id']
+    s, r = editor.call('POST', f'{M}/{future}/items/order', {'order': [consent, paving]})
+    ok(s == 200 and [i['id'] for i in r['items'] if i['status'] == 'accepted'] == [consent, paving], 'the clerk orders the agenda')
+    s, r = editor.call('GET', f'{M}/{future}/agenda/preview')
+    ok('Consent agenda' in r['text'] and 'Pine Street paving bids' in r['text'] and 'bid-tabulation.txt' in r['text'], 'the agenda preview lists items and attachments')
+    s, _ = mviewer.call('POST', f'{M}/{future}/agenda/publish')
+    ok(s == 403, "viewers can't publish agendas")
+    s, _ = works.call('POST', f'{M}/{future}/agenda/publish')
+    ok(s == 403, "department staff can't publish agendas")
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok(s == 200 and r['meeting']['agenda_published'] is None, 'residents see a scheduled meeting but no draft agenda')
+    s, r = editor.call('POST', f'{M}/{future}/agenda/publish')
+    ok(s == 200 and r['meeting']['agenda_status'] == 'published' and not r['meeting']['agenda_late'], 'an agenda published in time is not marked late')
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok('Pine Street paving bids' in (r['meeting']['agenda_published'] or '') and r['meeting']['files'], 'residents see the published agenda')
+    with urllib.request.urlopen(urllib.request.Request(f'{ORIGIN}/api{M}/files/{attachment}', headers={'User-Agent': 'CityHallOS-scripts/1.0'})) as res:
+        ok(res.status == 200 and b'Gulf Coast' in res.read(), 'attachments become public with the agenda')
+    editor.call('POST', f'{M}/{future}/items', {'title': 'Late addition', 'type': 'discussion'})
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok('Late addition' not in r['meeting']['agenda_published'], 'later changes stay out of the published agenda until approved')
+
+    editor.call('POST', f'{M}/{soon}/items', {'title': 'Budget amendment', 'type': 'action'})
+    s, r = editor.call('POST', f'{M}/{soon}/agenda/publish')
+    ok(s == 409 and r.get('late'), 'publishing an agenda after the notice deadline is stopped with a warning')
+    s, r = editor.call('POST', f'{M}/{soon}/agenda/publish', {'acknowledgeLate': True, 'reason': 'Test of a late agenda'})
+    ok(s == 200 and r['meeting']['agenda_late'] == 1, 'the approver can publish late, and it is recorded as late')
+    s, _ = editor.call('PUT', f'{M}/settings', {'regularHours': 12})
+    ok(s == 403, "only administrators change the notice rules")
+    s, r = admin.call('PUT', f'{M}/settings', {'regularHours': 12})
+    ok(s == 200 and r['rules']['regularHours'] == 12, 'notice timing is a per-city setting')
+    s, r = editor.call('GET', f'{M}/{soon}')
+    ok(r['deadlines']['agendaHours'] == 12, 'deadlines follow the city setting')
+    s, r = operator.call('GET', f'/{B}/meetings/settings')
+    ok(r['rules']['regularHours'] == 72, "one city's rules don't change another's")
+
+    # Minutes: a recording segment through Whisper, then a draft from typed notes, then approval.
+    import io, math, struct, wave
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(b''.join(struct.pack('<h', int(3000 * math.sin(i / 8))) for i in range(16000 * 2)))
+    req = urllib.request.Request(f'{ORIGIN}/api{M}/{future}/transcribe?seq=0&total=1&source=test.wav', data=buf.getvalue(), method='POST',
+                                 headers={'Content-Type': 'audio/wav', 'User-Agent': 'CityHallOS-scripts/1.0'})
+    with editor.opener.open(req, timeout=120) as res:
+        t = json.loads(res.read())
+    ok(t.get('done') is True, 'audio segments are transcribed with Workers AI Whisper')
+    notes = ('Mayor Carter called the meeting to order at 6:01 pm. Present: Carter, Reed, Grant, Ortiz. '
+             'Consent agenda: Grant moved to approve the minutes of the last meeting, Reed seconded, all in favor. '
+             'Pine Street paving: Pat Works presented three bids. Ortiz moved to award the contract to Gulf Coast Paving for $184,000, '
+             'Grant seconded. Roll call: Reed yes, Grant yes, Ortiz yes. Carried 3-0. Pat Works to return the signed contract by the next meeting. '
+             'Adjourned 6:40 pm.')
+    s, r = editor.call('POST', f'{M}/{future}/minutes/draft', {'source': 'notes', 'notes': notes}, timeout=300)
+    ok(s == 200 and r['meeting']['minutes_status'] == 'draft' and 'Grant' in (r['meeting']['minutes_draft'] or ''), 'the AI drafts minutes from typed notes')
+    ok('Motion' in (r['meeting']['minutes_draft'] or '') or bool(r['meeting']['minutes_suggestions'].get('error')), 'draft minutes record motions')
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok(r['meeting']['minutes_approved'] is None, 'draft minutes are never public')
+    s, r = editor.call('PUT', f'{M}/{future}/minutes', {'text': '# Minutes\n\n## Pine Street paving\n\nMotion to award the Pine Street paving contract to Gulf Coast Paving for $184,000, moved by Sam Ortiz, seconded by Lisa Grant. Vote: 3 yes. The motion carried.'})
+    ok(s == 200, 'the clerk edits the draft')
+    s, _ = mviewer.call('POST', f'{M}/{future}/minutes/approve')
+    ok(s == 403, "viewers can't approve minutes")
+    s, r = editor.call('POST', f'{M}/{future}/minutes/approve')
+    ok(s == 200 and r['meeting']['minutes_status'] == 'approved', 'a person approves the minutes')
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok('Gulf Coast Paving' in (r['meeting']['minutes_approved'] or ''), 'approved minutes are public')
+    s, r = anon.call('GET', f'{M}/public')
+    ok(any(x['id'] == future and x['has_minutes'] for x in r['meetings']), 'the public meetings list shows agendas and minutes')
+    s, r = editor.call('GET', f'/{A}/documents?category=Meetings%20%26%20Minutes')
+    titles = [d['title'] for d in r['documents']]
+    ok(any('minutes' in t for t in titles) and any('agenda' in t for t in titles), 'published agendas and approved minutes join the knowledge base')
+    s, r = editor.call('GET', f'/{A}/search?q=board%20decide%20Pine%20Street%20paving')
+    ok(bool(r['results']) and 'minutes' in r['results'][0]['title'], 'the AI City Clerk finds the decision in the minutes')
+    s, r = operator.call('GET', f'/{B}/search?q=Pine%20Street%20paving')
+    ok(not r['results'], "another city's search can't find these minutes")
+    s, r = operator.call('GET', f'/{B}/meetings/public/{future}')
+    ok(s == 404, "one city's meetings don't resolve in another")
+
+    # Action items.
+    s, r = editor.call('POST', f'{M}/{future}/actions', {'title': 'Return the signed paving contract', 'assignee_id': works_staff['id'], 'due_date': day(20)})
+    ok(s == 201 and r['action']['assignee'] == 'Pat Works', 'the clerk assigns action items to staff')
+    act = r['action']['id']
+    s, r = works.call('GET', f'{M}/actions?mine=1')
+    ok([a['id'] for a in r['actions']] == [act], 'staff see the action items assigned to them')
+    s, r = works.call('PATCH', f'{M}/actions/{act}', {'status': 'done', 'title': 'Renamed'})
+    ok(s == 200 and r['action']['status'] == 'done' and r['action']['title'] != 'Renamed', 'the assignee updates the status, nothing else')
+    s, _ = mviewer.call('PATCH', f'{M}/actions/{act}', {'status': 'open'})
+    ok(s == 403, "others can't change someone's action item")
+
+    # Past meetings added after the fact, with notes from another source (import_civic_notes.py uses this).
+    s, r = editor.call('POST', f'{M}/boards', {'name': 'Test County Board of Supervisors', 'external': True})
+    ok(s == 201 and r['board']['external'] == 1, "another government's body can be listed")
+    county = r['board']['id']
+    s, r = editor.call('POST', M, {'board_id': county, 'kind': 'regular', 'starts_at': f'{day(-60)}T09:00', 'historical': True})
+    ok(s == 201 and r['meeting']['status'] == 'held' and r['meeting']['historical'] == 1, 'past meetings are added as held')
+    past = r['meeting']['id']
+    article = f'https://news.example.test/recap-{RUN}/'
+    s, r = editor.call('POST', f'/{A}/documents', {'title': 'Road paving plans', 'category': 'FAQs', 'source_url': article, 'text': 'A note that cites the same article. ' * 3})
+    citing = r['documents'][0]['id']
+    s, _ = mviewer.call('PUT', f'{M}/{past}/record', {'text': 'x', 'source': 'Test News'})
+    ok(s == 403, "viewers can't add meeting notes")
+    notes_text = '## Opening Business\n\nThe board voted 5-0 to buy a new motor grader for District 2.'
+    s, r = editor.call('PUT', f'{M}/{past}/record', {'text': notes_text, 'source': 'Test News', 'url': article})
+    ok(s == 200 and r['meeting']['record_text'] == notes_text and not r['warnings'], 'notes from a news recap are saved, with no deadline warnings')
+    s, r = anon.call('GET', f'{M}/public/{past}')
+    ok(s == 200 and 'motor grader' in (r['meeting']['record_text'] or '') and r['meeting']['record_source'] == 'Test News' and not r['meeting']['minutes_approved'],
+       'residents see the notes labeled with their source, not as minutes')
+    s, r = editor.call('GET', f'/{A}/documents/{citing}')
+    ok(r['document']['title'] == 'Road paving plans', "a document that only cites the same article isn't replaced")
+    s, r = editor.call('GET', f'/{A}/search?q=motor%20grader%20District%202')
+    rec = next((x for x in r['results'] if 'meeting record' in x['title']), None)
+    ok(bool(rec), 'meeting notes are searchable')
+    s, d = editor.call('GET', f"/{A}/documents/{rec['docId']}") if rec else (0, {'document': {}})
+    ok(d['document'].get('authority') == 'media-report' and d['document'].get('verification') == 'secondary', 'the AI treats meeting notes as a news report')
+    editor.call('PUT', f'{M}/{past}/record', {'text': notes_text + ' Updated.', 'source': 'Test News', 'url': article})
+    s, r = editor.call('GET', f'/{A}/documents?category=Meetings%20%26%20Minutes')
+    ok(sum('meeting record' in x['title'] for x in r['documents']) == 1, 'updating the notes replaces the same document')
+
+    s, r = editor.call('GET', f'/{A}/audit?type=meeting')
+    acts = {e['action'] for e in r['events']}
+    for a in ['meeting.create', 'agenda.item_submit', 'agenda.item_accepted', 'agenda.order', 'meeting.file_add', 'agenda.publish',
+              'meeting.transcribe', 'minutes.draft', 'minutes.edit', 'minutes.approve', 'action.create', 'action.update', 'meeting.record']:
+        ok(a in acts, f'audit log records {a}')
+    e = next(e for e in r['events'] if e['action'] == 'agenda.publish' and 'late' in e['summary'].lower())
+    ok('Test of a late agenda' in e['summary'], 'a late agenda records who published it and why')
+    s, r = admin.call('GET', f'/{A}/audit?type=settings')
+    ok(any(e['action'] == 'meetings.settings' and e['changes']['regularHours'] == [72, 12] for e in r['events']), 'notice rule changes are audited with before and after values')
+    s, r = admin.call('GET', f'/{A}/export')
+    ok(len(r.get('meetings', [])) == 4 and len(r.get('action_items', [])) == 1, 'the city export includes meetings')
+    ok(len(r.get('licenses', [])) == 3, 'the city export includes business licenses')
 finally:
     for slug in (A, B):
         operator.call('PUT', f'/platform/cities/{slug}/status', {'status': 'archived'})

@@ -1,6 +1,9 @@
 // Staff sign-in, sessions and roles.
 import { DurableObject } from 'cloudflare:workers';
 
+// Public records requests (records.js): records.view sees the queue and the log; records.manage works requests and
+// releases records. Knowledge editors are usually the City Clerk's office, the records custodian, so they get both.
+// Viewers see the queue without requester contact details. Department staff don't see records requests.
 export const ROLES = {
   admin: {
     label: 'Administrator',
@@ -9,20 +12,23 @@ export const ROLES = {
   },
   editor: {
     label: 'Knowledge editor',
-    description: 'Manages the knowledge base and reviews conversations',
+    description: 'Manages the knowledge base, reviews conversations, keeps agendas and minutes, and handles public records requests',
     perms: ['overview', 'knowledge.view', 'knowledge.edit', 'assistant.test', 'conversations.view', 'conversations.review',
-      'requests.view', 'permits.view', 'channels.view', 'audit.view', 'report.view'],
+      'requests.view', 'permits.view', 'channels.view', 'audit.view', 'report.view',
+      'meetings.view', 'meetings.submit', 'meetings.manage', 'meetings.approve', 'records.view', 'records.manage', 'licenses.view'],
   },
   department: {
     label: 'Department staff',
-    description: "Works their own department's service requests, and permit applications in the permit department",
+    description: "Works their own department's service requests and crews, submits agenda items, and handles permit applications and business licenses in the departments that issue them",
+    // Permits and licenses only for staff of the issuing department (Planning & Building and City Hall unless the city's settings say otherwise).
     perms: ['overview', 'knowledge.view', 'assistant.test', 'conversations.view', 'requests.view', 'requests.edit', 'requests.create', 'report.view',
-      'permits.view', 'permits.edit', 'residents.contact'],
+      'permits.view', 'permits.edit', 'residents.contact', 'dispatch.view', 'dispatch.manage', 'meetings.view', 'meetings.submit',
+      'licenses.view', 'licenses.manage'],
   },
   viewer: {
     label: 'Viewer',
     description: 'Can see the dashboard but not change anything',
-    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'permits.view', 'channels.view', 'report.view'],
+    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'permits.view', 'channels.view', 'report.view', 'dispatch.view', 'meetings.view', 'records.view', 'licenses.view'],
   },
 };
 

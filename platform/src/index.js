@@ -11,12 +11,16 @@ import { phoneConfigured, phoneRoute } from './phone.js';
 import { afterHours } from './hours.js';
 import { remindStale, requestCreated, requestUpdated } from './alerts.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
+import { meetingsRoute } from './meetings.js';
+import { recordsPublic, recordsStaff } from './records.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
 import { enabledForms, formList, permitRoute, sendPermitReminders, tokenFor } from './permits/routes.js';
 import { FORMS } from './permits/forms/index.js';
 import { residentRoute } from './residents.js';
+import { DISPATCH_RESOURCES, afterRequestCreated, dispatchRoute } from './dispatch.js';
+import { isLicenseQuestion, licensingDaily, licensingSources, publicLicensing, staffLicensing } from './licensing.js';
 
 export { CityStore } from './store.js';
 export { AuthService } from './auth.js';
@@ -94,6 +98,8 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    // Each city's public meetings page: /{city}/meetings serves public/meetings.html.
+    if (/^\/[a-z0-9-]+\/meetings\/?$/.test(url.pathname)) return env.ASSETS.fetch(new Request(new URL('/meetings', url), request));
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     try {
       return await route(request, env, ctx, url);
@@ -104,7 +110,8 @@ export default {
     }
   },
 
-  // Daily at 15:00 UTC: remind applicants about unfinished permit applications and requested corrections.
+  // Daily at 15:00 UTC: remind applicants about unfinished permit applications and requested corrections, and send
+  // business license renewal notices.
   // Hourly: remind staff about service requests nobody has picked up.
   async scheduled(event, env, ctx) {
     const { results } = await env.DB.prepare("SELECT * FROM cities WHERE status = 'active'").all();
@@ -122,6 +129,9 @@ export default {
       } catch (e) {
         console.log(`${city.slug}: reminders failed`, e.stack || e.message);
       }
+    }
+    if (event.cron === DAILY_CRON) {
+      ctx.waitUntil(licensingDaily(env, results.map((r) => { const city = toCity(r); return { city, store: storeFor(env, city) }; })));
     }
   },
 };
@@ -159,7 +169,12 @@ async function route(request, env, ctx, url) {
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
     if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c), requestCreated });
     if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
+    if (res === 'records') { const out = await recordsPublic(request, env, ctx, city, store, me, parts, url); if (out) return out; }
+    if (res === 'licenses') { const r = await publicLicensing({ request, env, city, store, me, url, path: parts.slice(2), m }); if (r) return r; }
   }
+
+  // Meetings: public agendas and minutes, and the staff tools. meetings.js checks permissions itself.
+  if (res === 'meetings' && (city.status !== 'suspended' || me)) return meetingsRoute({ request, env, url, city, store, me, path: parts.slice(2) });
 
   // Staff only. Each route names the permission it needs.
   if (!me) return fail(401, 'Please sign in');
@@ -188,6 +203,8 @@ async function route(request, env, ctx, url) {
     if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, env, ctx, city, store, id, me); }
   }
   if (res === 'permits') return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
+  if (res === 'records') return recordsStaff(request, env, ctx, city, store, me, need, parts, url);
+  if (res === 'licenses') return staffLicensing({ request, env, city, store, me, need, url, path: parts.slice(2), m });
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
   if (res === 'departments' && (m === 'POST' || m === 'PUT')) { need('settings.edit'); return saveDepartment(request, store, id, me); }
   if (res === 'request-types') {
@@ -220,6 +237,8 @@ async function route(request, env, ctx, url) {
     return json({ city: { id: city.id, slug: city.slug, name: city.name, settings: city.settings }, exported_at: now(), ...(await store.exportAll()) }, 200,
       { 'Content-Disposition': `attachment; filename="${city.slug}-export-${now().slice(0, 10)}.json"` });
   }
+  // Public Works dispatcher: dispatch board, crews, work orders, map and field view (dispatch.js).
+  if (DISPATCH_RESOURCES.has(res)) return dispatchRoute(request, { env, ctx, url, city, store, me, need, json, fail, parts });
   return fail(404, 'Not found');
 }
 
@@ -231,6 +250,7 @@ async function publicConfig(city, store) {
     requestTypes: (await store.requestTypes()).map(({ key, label }) => ({ key, label })),
     permits: enabledForms(city).length > 0,
     forms: formList(city).map(({ kind, short, icon }) => ({ kind, short, icon })),
+    modules: ['records', 'licensing'], // chat add-ons the widget loads: /embed-{name}.js
   }, 200, { 'Cache-Control': 'public, max-age=60' });
 }
 
@@ -619,6 +639,7 @@ async function createRequest(request, env, ctx, city, store, me) {
     await store.setRequestPhoto(created.id, key);
   }
   ctx.waitUntil(requestCreated(env, city, store, created.id).catch((e) => console.log('request alerts failed', e.message)));
+  ctx.waitUntil(afterRequestCreated(env, city, store));
   return json({ ref: created.ref, department: created.department, status: 'new' }, 201);
 }
 
@@ -629,7 +650,7 @@ async function trackRequest(store, ref) {
     return p ? json(p) : fail(404, 'No permit application with that number');
   }
   const r = await store.trackRequest(ref);
-  return r ? json(r) : fail(404, 'No request with that number');
+  return r ? json({ ...r, ...(await store.workSchedule(r.ref)) }) : fail(404, 'No request with that number');
 }
 
 async function listRequests(store, me) {

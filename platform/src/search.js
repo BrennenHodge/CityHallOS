@@ -11,6 +11,8 @@ const SYNONYMS = {
   fence: ['fencing', 'accessory'], build: ['construction', 'building', 'permit'], building: ['construction', 'permit'],
   permit: ['application'], business: ['privilege', 'license'], license: ['privilege', 'business'],
   meeting: ['aldermen', 'board', 'agenda'], meetings: ['aldermen', 'board', 'agenda'], council: ['aldermen', 'board'],
+  decide: ['motion', 'vote', 'minutes'], decided: ['motion', 'vote', 'minutes'], decision: ['motion', 'vote', 'minutes'],
+  vote: ['motion', 'minutes'], voted: ['motion', 'vote', 'minutes'], approve: ['motion', 'approved'], approved: ['motion', 'vote'],
   ticket: ['court', 'fine', 'citation'], court: ['municipal', 'fine'], police: ['department', 'officer'],
   clerk: ['city', 'hall'], zoning: ['district', 'zone', 'land'], zone: ['zoning', 'district'],
   pothole: ['street', 'road'], streetlight: ['light', 'street'], sewer: ['wastewater'], hours: ['open', 'office'],
