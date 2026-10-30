@@ -9,20 +9,21 @@ export const ROLES = {
   },
   editor: {
     label: 'Knowledge editor',
-    description: 'Manages the knowledge base and reviews conversations',
+    description: 'Manages the knowledge base, reviews conversations, and keeps agendas and minutes',
     perms: ['overview', 'knowledge.view', 'knowledge.edit', 'assistant.test', 'conversations.view', 'conversations.review',
-      'requests.view', 'permits.view', 'channels.view', 'audit.view', 'report.view'],
+      'requests.view', 'permits.view', 'channels.view', 'audit.view', 'report.view',
+      'meetings.view', 'meetings.submit', 'meetings.manage', 'meetings.approve'],
   },
   department: {
     label: 'Department staff',
-    description: "Works their own department's service requests and crews, and permit applications in the permit department",
+    description: "Works their own department's service requests and crews, submits agenda items, and permit applications in the permit department",
     perms: ['overview', 'knowledge.view', 'assistant.test', 'conversations.view', 'requests.view', 'requests.edit', 'requests.create', 'report.view',
-      'permits.view', 'permits.edit', 'residents.contact', 'dispatch.view', 'dispatch.manage'],
+      'permits.view', 'permits.edit', 'residents.contact', 'dispatch.view', 'dispatch.manage', 'meetings.view', 'meetings.submit'],
   },
   viewer: {
     label: 'Viewer',
     description: 'Can see the dashboard but not change anything',
-    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'permits.view', 'channels.view', 'report.view', 'dispatch.view'],
+    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'permits.view', 'channels.view', 'report.view', 'dispatch.view', 'meetings.view'],
   },
 };
 

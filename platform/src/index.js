@@ -11,6 +11,7 @@ import { phoneConfigured, phoneRoute } from './phone.js';
 import { afterHours } from './hours.js';
 import { remindStale, requestCreated, requestUpdated } from './alerts.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
+import { meetingsRoute } from './meetings.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
@@ -93,6 +94,8 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    // Each city's public meetings page: /{city}/meetings serves public/meetings.html.
+    if (/^\/[a-z0-9-]+\/meetings\/?$/.test(url.pathname)) return env.ASSETS.fetch(new Request(new URL('/meetings', url), request));
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     try {
       return await route(request, env, ctx, url);
@@ -158,6 +161,9 @@ async function route(request, env, ctx, url) {
     if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c), requestCreated });
     if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   }
+
+  // Meetings: public agendas and minutes, and the staff tools. meetings.js checks permissions itself.
+  if (res === 'meetings' && (city.status !== 'suspended' || me)) return meetingsRoute({ request, env, url, city, store, me, path: parts.slice(2) });
 
   // Staff only. Each route names the permission it needs.
   if (!me) return fail(401, 'Please sign in');

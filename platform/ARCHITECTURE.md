@@ -38,7 +38,8 @@ is no shared table to forget a `WHERE city = ?` on.
 
 Each store holds that city's departments, request types, staff directory, knowledge base (documents, passages and
 the full-text index), conversations, citations, service requests with their timelines, permit applications (`permits`,
-`permit_files`, `permit_events`), the `outbox` of every email, text and call sent to a resident, and the audit log.
+`permit_files`, `permit_events`), crews and work orders, boards and meetings (agendas, minutes, action items), the `outbox`
+of every email, text and call sent to a resident, and the audit log.
 
 Why one database per city:
 
@@ -59,10 +60,10 @@ Defined in `src/auth.js`. Every staff API route names the permission it needs.
 
 | Role | Can |
 |---|---|
-| Administrator | Everything: staff accounts, roles, settings, export |
-| Knowledge editor | Add and change documents, review conversations, read the audit log, see permit applications |
-| Department staff | See and work only their department's requests, log phone and counter requests, dispatch their department's crews and work orders; staff of the permit department (Planning & Building by default) decide permit applications |
-| Viewer | See the dashboard, dispatch board and permit applications; resident names and contact details are hidden |
+| Administrator | Everything: staff accounts, roles, settings (including public notice rules), export |
+| Knowledge editor | Add and change documents, review conversations, read the audit log, see permit applications; keep boards, agendas and minutes, and approve publishing them (the City Clerk's role) |
+| Department staff | See and work only their department's requests, log phone and counter requests, dispatch their department's crews and work orders, submit agenda items and update action items assigned to them; staff of the permit department (Planning & Building by default) decide permit applications |
+| Viewer | See the dashboard, dispatch board, meetings and permit applications; resident names and contact details are hidden |
 
 City Hall OS support signs in with the `ADMIN_KEY` access code and acts as an administrator in every city.
 Scripts can send the same code as a bearer token.
@@ -154,6 +155,33 @@ Turns service requests into scheduled field work (`src/dispatch.js` for the API,
   isn't made again. Suggestions are recorded in the audit log as the AI's, decisions as the staff member's.
 - **Typed addresses** are placed on the map with the free US Census Bureau geocoder, falling back to OpenStreetMap's Nominatim.
   Requests with GPS keep their own coordinates; anything that can't be placed is listed under "No location".
+
+## Meetings (`src/meetings.js`, `src/meetings-store.js`)
+
+The Meeting secretary keeps each city's boards (Board of Aldermen, planning commission…) and their members, and their
+meetings: regular, special and work sessions.
+
+- **Agendas.** Staff submit items (`meetings.submit`); the clerk accepts, returns and orders them (`meetings.manage`); a
+  person with `meetings.approve` publishes. Publishing after the notice deadline is refused until the approver confirms and
+  gives a reason, and the agenda is marked late. Deadlines are per-city settings (`meetings/settings`); Mississippi cities
+  default to the Open Meetings Act (Miss. Code Ann. § 25-41-13 notice, § 25-41-11 minutes within 30 days), cited in
+  `meetings.js`.
+- **Minutes.** Recordings upload to R2 (`{city id}/meetings/{meeting id}/`) in multipart parts and are transcribed with
+  Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`) one segment per request, so long meetings show progress and
+  resume: MP3 is read from R2 in 2 MB byte ranges; other audio and video is decoded in the dashboard into two-minute
+  16 kHz WAV segments. The AI drafts minutes from the transcript or the clerk's typed notes (attendance, motions with
+  mover and seconder, votes by name, action items) and lists what to double-check. The clerk edits; a person approves.
+- **Publishing.** Residents see only published agendas and approved minutes, at `/{city}/meetings`. Both are snapshots, so
+  a revision in progress never changes what is public. Each is also added to the knowledge base (category
+  "Meetings & Minutes", verified current), so the AI City Clerk can cite the board's decisions.
+- **Action items** from a meeting are assigned to staff; the assignee updates the status.
+- **Past meetings and other governments.** Meetings can be added after the fact (`historical`, no deadlines) with notes
+  from another source, such as a local news recap (`PUT /meetings/{id}/record`). Residents see the notes labeled with their
+  source, never as minutes, and the knowledge base holds them as a news report. Boards can be another government's body
+  (`external`, e.g. the county board of supervisors), listed for residents without deadlines for the clerk.
+  `scripts/import_civic_notes.py` loads every meeting recap from WigginsMS.com Civic Notes this way; it is safe to rerun.
+
+Every change is in the audit log under the meeting (`entity_type = 'meeting'`).
 
 ## Adding a city
 
