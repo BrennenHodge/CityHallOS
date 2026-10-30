@@ -97,6 +97,11 @@ meetings: regular, special and work sessions.
   a revision in progress never changes what is public. Each is also added to the knowledge base (category
   "Meetings & Minutes", verified current), so the AI City Clerk can cite the board's decisions.
 - **Action items** from a meeting are assigned to staff; the assignee updates the status.
+- **Past meetings and other governments.** Meetings can be added after the fact (`historical`, no deadlines) with notes
+  from another source, such as a local news recap (`PUT /meetings/{id}/record`). Residents see the notes labeled with their
+  source, never as minutes, and the knowledge base holds them as a news report. Boards can be another government's body
+  (`external`, e.g. the county board of supervisors), listed for residents without deadlines for the clerk.
+  `scripts/import_civic_notes.py` loads every meeting recap from WigginsMS.com Civic Notes this way; it is safe to rerun.
 
 Every change is in the audit log under the meeting (`entity_type = 'meeting'`).
 

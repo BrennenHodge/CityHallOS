@@ -317,17 +317,46 @@ try:
     s, _ = mviewer.call('PATCH', f'{M}/actions/{act}', {'status': 'open'})
     ok(s == 403, "others can't change someone's action item")
 
+    # Past meetings added after the fact, with notes from another source (import_civic_notes.py uses this).
+    s, r = editor.call('POST', f'{M}/boards', {'name': 'Test County Board of Supervisors', 'external': True})
+    ok(s == 201 and r['board']['external'] == 1, "another government's body can be listed")
+    county = r['board']['id']
+    s, r = editor.call('POST', M, {'board_id': county, 'kind': 'regular', 'starts_at': f'{day(-60)}T09:00', 'historical': True})
+    ok(s == 201 and r['meeting']['status'] == 'held' and r['meeting']['historical'] == 1, 'past meetings are added as held')
+    past = r['meeting']['id']
+    article = f'https://news.example.test/recap-{RUN}/'
+    s, r = editor.call('POST', f'/{A}/documents', {'title': 'Road paving plans', 'category': 'FAQs', 'source_url': article, 'text': 'A note that cites the same article. ' * 3})
+    citing = r['documents'][0]['id']
+    s, _ = mviewer.call('PUT', f'{M}/{past}/record', {'text': 'x', 'source': 'Test News'})
+    ok(s == 403, "viewers can't add meeting notes")
+    notes_text = '## Opening Business\n\nThe board voted 5-0 to buy a new motor grader for District 2.'
+    s, r = editor.call('PUT', f'{M}/{past}/record', {'text': notes_text, 'source': 'Test News', 'url': article})
+    ok(s == 200 and r['meeting']['record_text'] == notes_text and not r['warnings'], 'notes from a news recap are saved, with no deadline warnings')
+    s, r = anon.call('GET', f'{M}/public/{past}')
+    ok(s == 200 and 'motor grader' in (r['meeting']['record_text'] or '') and r['meeting']['record_source'] == 'Test News' and not r['meeting']['minutes_approved'],
+       'residents see the notes labeled with their source, not as minutes')
+    s, r = editor.call('GET', f'/{A}/documents/{citing}')
+    ok(r['document']['title'] == 'Road paving plans', "a document that only cites the same article isn't replaced")
+    s, r = editor.call('GET', f'/{A}/search?q=motor%20grader%20District%202')
+    rec = next((x for x in r['results'] if 'meeting record' in x['title']), None)
+    ok(bool(rec), 'meeting notes are searchable')
+    s, d = editor.call('GET', f"/{A}/documents/{rec['docId']}") if rec else (0, {'document': {}})
+    ok(d['document'].get('authority') == 'media-report' and d['document'].get('verification') == 'secondary', 'the AI treats meeting notes as a news report')
+    editor.call('PUT', f'{M}/{past}/record', {'text': notes_text + ' Updated.', 'source': 'Test News', 'url': article})
+    s, r = editor.call('GET', f'/{A}/documents?category=Meetings%20%26%20Minutes')
+    ok(sum('meeting record' in x['title'] for x in r['documents']) == 1, 'updating the notes replaces the same document')
+
     s, r = editor.call('GET', f'/{A}/audit?type=meeting')
     acts = {e['action'] for e in r['events']}
     for a in ['meeting.create', 'agenda.item_submit', 'agenda.item_accepted', 'agenda.order', 'meeting.file_add', 'agenda.publish',
-              'meeting.transcribe', 'minutes.draft', 'minutes.edit', 'minutes.approve', 'action.create', 'action.update']:
+              'meeting.transcribe', 'minutes.draft', 'minutes.edit', 'minutes.approve', 'action.create', 'action.update', 'meeting.record']:
         ok(a in acts, f'audit log records {a}')
     e = next(e for e in r['events'] if e['action'] == 'agenda.publish' and 'late' in e['summary'].lower())
     ok('Test of a late agenda' in e['summary'], 'a late agenda records who published it and why')
     s, r = admin.call('GET', f'/{A}/audit?type=settings')
     ok(any(e['action'] == 'meetings.settings' and e['changes']['regularHours'] == [72, 12] for e in r['events']), 'notice rule changes are audited with before and after values')
     s, r = admin.call('GET', f'/{A}/export')
-    ok(len(r.get('meetings', [])) == 3 and len(r.get('action_items', [])) == 1, 'the city export includes meetings')
+    ok(len(r.get('meetings', [])) == 4 and len(r.get('action_items', [])) == 1, 'the city export includes meetings')
 finally:
     for slug in (A, B):
         operator.call('PUT', f'/platform/cities/{slug}/status', {'status': 'archived'})

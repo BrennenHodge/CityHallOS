@@ -202,6 +202,7 @@ const MIGRATIONS = [
     description TEXT,
     schedule TEXT,
     location TEXT,
+    external INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     sort INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -226,15 +227,18 @@ const MIGRATIONS = [
 
   -- starts_at is the city's local wall time ("2026-11-03T18:00"). Published agendas and approved minutes are
   -- kept as snapshots, so revising a draft never changes what residents already see.
+  -- historical meetings were entered after the fact (no notice or minutes deadlines). record_* is an account of the
+  -- meeting from another source, such as a local news recap: shown to residents as that, never as official minutes.
   CREATE TABLE meetings (
     id TEXT PRIMARY KEY,
     board_id TEXT NOT NULL REFERENCES boards(id),
-    kind TEXT NOT NULL DEFAULT 'regular' CHECK (kind IN ('regular', 'special', 'work_session')),
+    kind TEXT NOT NULL DEFAULT 'regular' CHECK (kind IN ('regular', 'special', 'work_session', 'community')),
     title TEXT,
     starts_at TEXT NOT NULL,
     location TEXT,
     purpose TEXT,
     status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'held', 'cancelled', 'postponed')),
+    historical INTEGER NOT NULL DEFAULT 0,
     called_at TEXT,
     notice_posted_at TEXT,
     agenda_status TEXT NOT NULL DEFAULT 'draft' CHECK (agenda_status IN ('draft', 'ready', 'published')),
@@ -255,6 +259,10 @@ const MIGRATIONS = [
     minutes_approved_at TEXT,
     minutes_approved_by TEXT,
     minutes_doc_id TEXT,
+    record_text TEXT,
+    record_source TEXT,
+    record_url TEXT,
+    record_doc_id TEXT,
     created_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

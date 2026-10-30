@@ -2,7 +2,7 @@
 (() => {
   const slug = (location.pathname.match(/^\/([a-z0-9-]+)\/meetings/) || [])[1] || new URLSearchParams(location.search).get('city');
   const API = `/api/${slug}/meetings/public`;
-  const KINDS = { regular: 'Regular meeting', special: 'Special meeting', work_session: 'Work session' };
+  const KINDS = { regular: 'Regular meeting', special: 'Special meeting', work_session: 'Work session', community: 'Town hall' };
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const wall = (s) => new Date(`${s.slice(0, 10)}T${s.slice(11, 16) || '00:00'}:00`);
@@ -36,6 +36,7 @@
       m.status === 'cancelled' ? '<span class="tag no">Cancelled</span>' : m.status === 'postponed' ? '<span class="tag no">Postponed</span>' : '',
       m.has_agenda ? '<span class="tag ok">Agenda</span>' : '',
       m.has_minutes ? '<span class="tag ok">Minutes</span>' : '',
+      m.has_record ? '<span class="tag">Notes</span>' : '',
     ].join('');
     return `<div class="m" id="${m.id}"><button aria-expanded="false" data-id="${m.id}">
       <div class="d"><b>${d.getDate()}</b><small>${d.toLocaleDateString('en-US', { month: 'short' })}</small></div>
@@ -58,10 +59,12 @@
     }
     const m = loaded.get(id);
     if (!m) { body.innerHTML = '<p class="note">This meeting is not available.</p>'; return; }
-    const parts = [m.minutes_approved && ['minutes', 'Minutes'], m.agenda_published && ['agenda', 'Agenda']].filter(Boolean);
+    const parts = [m.minutes_approved && ['minutes', 'Minutes'], m.agenda_published && ['agenda', 'Agenda'], m.record_text && ['record', 'Meeting notes']].filter(Boolean);
     const show = (k) => {
       body.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.k === k));
-      body.querySelector('.view').innerHTML = k === 'minutes'
+      body.querySelector('.view').innerHTML = k === 'record'
+        ? `<p class="note">An account of this meeting by ${esc(m.record_source)}${m.record_url ? ` (<a href="${esc(m.record_url)}" target="_blank" rel="noopener">original</a>)` : ''}. It is not the official minutes${m.external ? '' : '; the City Clerk keeps those'}.</p>${doc(m.record_text)}`
+        : k === 'minutes'
         ? `${doc(m.minutes_approved)}<p class="note">Approved ${esc(new Date(m.minutes_approved_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }))}.</p>`
         : `${doc(m.agenda_published)}<p class="note">Agenda posted ${esc(new Date(m.agenda_published_at).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }))}.</p>`;
     };
@@ -94,7 +97,7 @@
     document.title = `Public meetings | ${c.name}`;
     document.documentElement.style.setProperty('--brand', c.brandColor || '#1f5c46');
     $('#cityName').innerHTML = `${esc(c.name)}<br>${esc(c.state)}`;
-    $('#lead').textContent = `Meetings of the ${c.shortName} ${data.boards.map((b) => b.name).join(', ') || 'city boards'}: agendas for upcoming meetings and approved minutes of past meetings. Meetings are open to the public.`;
+    $('#lead').textContent = `Meetings of the ${c.shortName} ${data.boards.map((b) => b.name).join(', ') || 'city boards'}: agendas for upcoming meetings, and minutes and meeting notes for past ones. Meetings are open to the public.`;
     if (data.boards.length > 1) {
       $('#filters').innerHTML = `<button class="on" data-b="">All boards</button>${data.boards.map((b) => `<button data-b="${b.id}">${esc(b.name)}</button>`).join('')}`;
       $('#filters').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; board = b.dataset.b; $('#filters').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); draw(); };

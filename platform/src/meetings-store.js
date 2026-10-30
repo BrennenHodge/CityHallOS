@@ -9,7 +9,7 @@ const label = (s) => String(s || '').replace(/_/g, ' ');
 
 export const MEETING_TABLES = ['boards', 'board_members', 'meetings', 'agenda_items', 'meeting_files', 'action_items', 'meeting_settings'];
 
-const BOARD_FIELDS = ['name', 'kind', 'description', 'schedule', 'location', 'active', 'sort'];
+const BOARD_FIELDS = ['name', 'kind', 'description', 'schedule', 'location', 'external', 'active', 'sort'];
 const MEMBER_FIELDS = ['name', 'seat', 'role', 'voting', 'staff_id', 'term_ends', 'active', 'sort'];
 const MEETING_FIELDS = ['board_id', 'kind', 'title', 'starts_at', 'location', 'purpose', 'status', 'called_at', 'notice_posted_at'];
 const ITEM_FIELDS = ['type', 'title', 'description', 'presenter', 'department_id', 'recommended_action', 'status', 'review_note'];
@@ -75,9 +75,9 @@ export const MEETING_OPS = {
       if (!id) {
         id = uid('b');
         const t = now();
-        this.run('INSERT INTO boards (id, name, kind, description, schedule, location, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          id, p.name, p.kind || 'board', p.description ?? null, p.schedule ?? null, p.location ?? null, p.sort ?? 0, t, t);
-        this.log(actor, 'board.create', 'board', id, `Added the ${p.name}`);
+        this.run('INSERT INTO boards (id, name, kind, description, schedule, location, external, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          id, p.name, p.kind || 'board', p.description ?? null, p.schedule ?? null, p.location ?? null, p.external ?? 0, p.sort ?? 0, t, t);
+        this.log(actor, 'board.create', 'board', id, `Added the ${p.name}${p.external ? " (another government's body)" : ''}`);
         return this.board(id);
       }
       const before = this.board(id);
@@ -122,7 +122,7 @@ export const MEETING_OPS = {
     if (from) { where.push('m.starts_at >= ?'); args.push(from); }
     if (to) { where.push('m.starts_at < ?'); args.push(to); }
     if (boardId) { where.push('m.board_id = ?'); args.push(boardId); }
-    return this.all(`SELECT m.id, m.board_id, b.name AS board, m.kind, m.title, m.starts_at, m.location, m.purpose, m.status, m.called_at,
+    return this.all(`SELECT m.id, m.board_id, b.name AS board, b.external, m.historical, m.record_source, m.kind, m.title, m.starts_at, m.location, m.purpose, m.status, m.called_at,
         m.notice_posted_at, m.agenda_status, m.agenda_published_at, m.agenda_late, m.transcript_status, m.minutes_status, m.minutes_approved_at,
         (SELECT COUNT(*) FROM agenda_items i WHERE i.meeting_id = m.id AND i.status = 'accepted') AS items,
         (SELECT COUNT(*) FROM agenda_items i WHERE i.meeting_id = m.id AND i.status = 'submitted') AS submitted,
@@ -134,7 +134,7 @@ export const MEETING_OPS = {
   row(id) { return this.one('SELECT * FROM meetings WHERE id = ?', id); },
 
   get(id) {
-    const m = this.one('SELECT m.*, b.name AS board, b.kind AS board_kind FROM meetings m JOIN boards b ON b.id = m.board_id WHERE m.id = ?', id);
+    const m = this.one('SELECT m.*, b.name AS board, b.kind AS board_kind, b.external FROM meetings m JOIN boards b ON b.id = m.board_id WHERE m.id = ?', id);
     if (!m) return null;
     return {
       meeting: { ...m, minutes_suggestions: m.minutes_suggestions ? JSON.parse(m.minutes_suggestions) : null,
@@ -151,11 +151,11 @@ export const MEETING_OPS = {
     const id = uid('m');
     const t = now();
     return this.tx(() => {
-      this.run(`INSERT INTO meetings (id, board_id, kind, title, starts_at, location, purpose, called_at, notice_posted_at, created_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, p.board_id, p.kind, p.title ?? null, p.starts_at, p.location ?? null, p.purpose ?? null,
-      p.called_at ?? null, p.notice_posted_at ?? null, actor.name, t, t);
+      this.run(`INSERT INTO meetings (id, board_id, kind, title, starts_at, location, purpose, status, historical, called_at, notice_posted_at, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, p.board_id, p.kind, p.title ?? null, p.starts_at, p.location ?? null, p.purpose ?? null,
+      p.historical ? 'held' : 'scheduled', p.historical ? 1 : 0, p.called_at ?? null, p.notice_posted_at ?? null, actor.name, t, t);
       const m = this.row(id);
-      this.log(actor, 'meeting.create', 'meeting', id, `Scheduled the ${meetingName(this, m)}`,
+      this.log(actor, 'meeting.create', 'meeting', id, `${p.historical ? 'Added the past' : 'Scheduled the'} ${meetingName(this, m)}`,
         { kind: [null, p.kind], starts_at: [null, p.starts_at], location: [null, p.location ?? null] });
       return m;
     });
@@ -256,8 +256,27 @@ export const MEETING_OPS = {
   },
 
   setDocument(id, field, docId) {
-    if (!['agenda_doc_id', 'minutes_doc_id'].includes(field)) throw new Error('Unknown document field');
+    if (!['agenda_doc_id', 'minutes_doc_id', 'record_doc_id'].includes(field)) throw new Error('Unknown document field');
     this.run(`UPDATE meetings SET ${field} = ? WHERE id = ?`, docId, id);
+  },
+
+  // An account of the meeting from another source (a news recap, a clerk's summary). Never treated as minutes.
+  saveRecord(id, { text, source, url }, actor) {
+    const before = this.row(id);
+    if (!before) return null;
+    this.tx(() => {
+      this.run('UPDATE meetings SET record_text = ?, record_source = ?, record_url = ?, updated_at = ? WHERE id = ?', text, source, url, now(), id);
+      this.log(actor, 'meeting.record', 'meeting', id, `${before.record_text ? 'Updated' : 'Added'} the meeting record from ${source || 'another source'}`,
+        { record_source: [before.record_source, source], record_url: [before.record_url, url], characters: [(before.record_text || '').length, (text || '').length] });
+    });
+    return this.row(id);
+  },
+
+  // A news recap of this meeting already in the knowledge base. Other documents can cite the same article (a note about
+  // site plans, say), so only a meetings document that is itself the recap qualifies.
+  docBySource(url) {
+    return this.one(`SELECT id FROM documents WHERE source_url = ? AND category = 'Meetings & Minutes' AND authority = 'media-report'
+      AND (title LIKE '%recap%' OR title LIKE '%meeting record%') ORDER BY chunks DESC LIMIT 1`, url)?.id || null;
   },
 
   /* ---------------- Files ---------------- */
@@ -429,16 +448,17 @@ export const MEETING_OPS = {
   /* ---------------- What residents see ---------------- */
 
   publicList({ today }) {
-    const rows = this.all(`SELECT m.id, b.name AS board, m.board_id, m.kind, m.title, m.starts_at, m.location, m.purpose, m.status,
-        m.agenda_published_at, m.minutes_approved_at FROM meetings m JOIN boards b ON b.id = m.board_id
-      WHERE (m.starts_at >= ? AND m.status != 'held') OR m.agenda_published IS NOT NULL OR m.minutes_approved IS NOT NULL
-      ORDER BY m.starts_at DESC LIMIT 300`, today);
-    return rows.map(({ agenda_published_at, minutes_approved_at, ...r }) => ({ ...r, has_agenda: !!agenda_published_at, has_minutes: !!minutes_approved_at }));
+    const rows = this.all(`SELECT m.id, b.name AS board, b.external, m.board_id, m.kind, m.title, m.starts_at, m.location, m.purpose, m.status,
+        m.agenda_published_at, m.minutes_approved_at, m.record_text IS NOT NULL AS has_record FROM meetings m JOIN boards b ON b.id = m.board_id
+      WHERE (m.starts_at >= ? AND m.status != 'held') OR m.agenda_published IS NOT NULL OR m.minutes_approved IS NOT NULL OR m.record_text IS NOT NULL
+      ORDER BY m.starts_at DESC LIMIT 500`, today);
+    return rows.map(({ agenda_published_at, minutes_approved_at, has_record, ...r }) => ({ ...r, has_agenda: !!agenda_published_at, has_minutes: !!minutes_approved_at, has_record: !!has_record }));
   },
 
   publicGet(id) {
-    const m = this.one(`SELECT m.id, b.name AS board, m.board_id, m.kind, m.title, m.starts_at, m.location, m.purpose, m.status, m.agenda_published,
-        m.agenda_published_at, m.agenda_late, m.minutes_approved, m.minutes_approved_at FROM meetings m JOIN boards b ON b.id = m.board_id WHERE m.id = ?`, id);
+    const m = this.one(`SELECT m.id, b.name AS board, b.external, m.board_id, m.kind, m.title, m.starts_at, m.location, m.purpose, m.status, m.agenda_published,
+        m.agenda_published_at, m.agenda_late, m.minutes_approved, m.minutes_approved_at, m.record_text, m.record_source, m.record_url
+      FROM meetings m JOIN boards b ON b.id = m.board_id WHERE m.id = ?`, id);
     if (!m) return null;
     // Attachments become public with the agenda; recordings stay with staff.
     const files = m.agenda_published_at ? this.all(`SELECT f.id, f.item_id, f.file_name, f.mime, f.bytes FROM meeting_files f

@@ -24,7 +24,7 @@ const MP3_SEGMENT = 2 * 1024 * 1024; // about two minutes of a typical meeting r
 const PART_SIZE = 25 * 1024 * 1024; // R2 multipart parts must be at least 5 MiB, except the last
 const MAX_SEGMENT = 12 * 1024 * 1024;
 
-const MEETING_KINDS = { regular: 'Regular', special: 'Special', work_session: 'Work session' };
+const MEETING_KINDS = { regular: 'Regular', special: 'Special', work_session: 'Work session', community: 'Town hall' };
 const ITEM_TYPES = { consent: 'Consent', action: 'Action', discussion: 'Discussion', public_hearing: 'Public hearing', report: 'Report' };
 const BOARD_KINDS = ['council', 'board', 'commission', 'committee', 'authority', 'other'];
 const MEMBER_ROLES = ['presiding', 'vice', 'member', 'clerk', 'attorney', 'staff'];
@@ -68,6 +68,8 @@ async function rulesFor(city, store) {
   return { ...defaultRules(city.state), ...((await store.meetings('settings')) || {}) };
 }
 const requiredHours = (rules, kind) => ({ regular: rules.regularHours, special: rules.specialHours, work_session: rules.workSessionHours }[kind] ?? 0);
+// Meetings entered after the fact, and meetings of another government's body, have no deadlines for the clerk.
+const tracked = (m) => !m.historical && !m.external;
 
 /* ---------------- Local time ---------------- */
 
@@ -106,7 +108,7 @@ const isoLocal = (s) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s || '');
 // What the clerk should know about a meeting right now, most urgent first.
 export function meetingWarnings(m, rules, tz, at = new Date()) {
   const out = [];
-  if (m.status === 'cancelled') return out;
+  if (m.status === 'cancelled' || !tracked(m)) return out;
   const start = localToUtc(m.starts_at, tz);
   const need = requiredHours(rules, m.kind);
   const due = new Date(start.getTime() - need * 3600e3);
@@ -398,7 +400,7 @@ export async function meetingsRoute({ request, env, url, city, store, me, path }
   if (a === 'public' && m === 'GET') {
     if (b) {
       const meeting = await store.meetings('publicGet', b);
-      if (!meeting || (!meeting.agenda_published && !meeting.minutes_approved && meeting.starts_at < localNow(city.timezone).slice(0, 10))) return fail(404, 'Meeting not found');
+      if (!meeting || (!meeting.agenda_published && !meeting.minutes_approved && !meeting.record_text && meeting.starts_at < localNow(city.timezone).slice(0, 10))) return fail(404, 'Meeting not found');
       return json({ meeting }, 200, { 'Cache-Control': 'public, max-age=60' });
     }
     const s = city.settings;
@@ -513,6 +515,7 @@ export async function meetingsRoute({ request, env, url, city, store, me, path }
     if (c === 'reopen' && m === 'POST') { need('meetings.manage'); await store.meetings('reopenMinutes', id, me.actor); return meetingDetail(id, city, store); }
   }
 
+  if (b === 'record' && m === 'PUT') { need('meetings.manage'); return saveRecord(await body(), meeting, city, store, me); }
   if (b === 'actions' && m === 'POST') { need('meetings.manage'); return addAction(await body(), meeting, env, city, store, me); }
   if (b === 'history' && m === 'GET') { need('meetings.view'); return json({ events: await store.audit({ entityType: 'meeting', entityId: id, limit: 200 }) }); }
   return fail(404, 'Not found');
@@ -544,6 +547,7 @@ async function saveBoard(b, id, store, me) {
   if ('kind' in b) p.kind = BOARD_KINDS.includes(b.kind) ? b.kind : 'board';
   for (const [k, max] of [['description', 1000], ['schedule', 300], ['location', 300]]) if (k in b) p[k] = clean(b[k], max);
   if ('active' in b) p.active = b.active ? 1 : 0;
+  if ('external' in b) p.external = b.external ? 1 : 0;
   try {
     const board = await store.meetings('saveBoard', id, p, me.actor);
     return board ? json({ board }, id ? 200 : 201) : fail(404, 'Board not found');
@@ -616,6 +620,7 @@ function meetingInput(b, city, partial) {
     const v = clean(b[k], 30);
     p[k] = !v ? null : isoLocal(v) ? localToUtc(v, city.timezone).toISOString() : Number.isNaN(Date.parse(v)) ? null : new Date(v).toISOString();
   }
+  if (!partial && b.historical) p.historical = true;
   if (partial && 'status' in b) {
     if (!['scheduled', 'held', 'cancelled', 'postponed'].includes(b.status)) throw httpError(400, 'Invalid status');
     p.status = b.status;
@@ -629,7 +634,7 @@ async function createMeeting(b, city, store, me) {
   if (!board) return fail(400, 'Choose a board');
   if (!p.location) p.location = board.location;
   // A special meeting is "called" when it is scheduled, unless the clerk says otherwise.
-  if (p.kind !== 'regular' && !p.called_at) p.called_at = new Date().toISOString();
+  if (p.kind !== 'regular' && !p.called_at && !p.historical) p.called_at = new Date().toISOString();
   const meeting = await store.meetings('create', p, me.actor);
   return json({ meeting }, 201);
 }
@@ -851,6 +856,36 @@ async function approveMinutes(meeting, city, store, me, origin) {
   const board = (await store.meetings('board', meeting.board_id)).name;
   const text = `${updated.minutes_approved}\n\nApproved for publication by ${me.actor.name} on ${updated.minutes_approved_at.slice(0, 10)}.`;
   await publishToKnowledge(store, city, { ...updated, board }, 'minutes', text, me.actor, origin);
+  return meetingDetail(meeting.id, city, store);
+}
+
+// An account of a meeting from another source, such as a local news recap. Residents see it labeled with its source,
+// and the knowledge base holds it as a news report, so the AI City Clerk says "local news reported", not "the minutes say".
+async function saveRecord(b, meeting, city, store, me) {
+  const text = clean(b.text, 400_000);
+  const source = clean(b.source, 120);
+  const url = clean(b.url, 500);
+  if (!text || !source) return fail(400, 'Send the text of the record and where it comes from');
+  if (url && !/^https?:\/\//i.test(url)) return fail(400, 'The source link must start with http:// or https://');
+  const updated = await store.meetings('saveRecord', meeting.id, { text, source, url }, me.actor);
+  const board = await store.meetings('board', meeting.board_id);
+  const title = `${board.name} meeting record: ${MEETING_KINDS[meeting.kind].toLowerCase()} meeting of ${longDate(meeting.starts_at)} (${source}, unofficial)`;
+  const doc = { title, category: 'Meetings & Minutes', authority: 'media-report', verification: 'secondary', visibility: 'public', as_of: meeting.starts_at.slice(0, 10) };
+  const body = `# ${title}\n\n${MEETING_KINDS[meeting.kind]} meeting of the ${board.name}, ${longDate(meeting.starts_at)}, ${timeOf(meeting.starts_at)}` +
+    `${meeting.location ? `, ${meeting.location}` : ''}. Account by ${source}${url ? ` (${url})` : ''}; not the official minutes.\n\n${text}`;
+  // Reuse a knowledge-base document that already holds this source (for example from the original city import).
+  const existing = updated.record_doc_id || (url && (await store.meetings('docBySource', url)));
+  if (existing && (await store.documentRow(existing))) {
+    await store.updateDocument(existing, { ...doc, source_url: url }, me.actor);
+    await store.indexDocument(existing, chunkText(body), body.length, me.actor, 'Replaced with the full meeting record');
+    if (existing !== updated.record_doc_id) await store.meetings('setDocument', meeting.id, 'record_doc_id', existing);
+  } else {
+    const id = uid('d');
+    await store.createDocument({ id, ...doc, source_url: url, file_key: null, file_name: null, mime: 'text/markdown', bytes: 0,
+      notes: 'A meeting record from Meetings. Change it there.' }, me.actor);
+    await store.indexDocument(id, chunkText(body), body.length, me.actor);
+    await store.meetings('setDocument', meeting.id, 'record_doc_id', id);
+  }
   return meetingDetail(meeting.id, city, store);
 }
 

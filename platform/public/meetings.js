@@ -2,7 +2,7 @@
    Pages: #/meetings (list), #/meetings/<id> (one meeting), #/meetings/actions, #/meetings/boards, #/meetings/rules. */
 (() => {
   const C = () => window.CHOS;
-  const KINDS = { regular: 'Regular', special: 'Special', work_session: 'Work session' };
+  const KINDS = { regular: 'Regular', special: 'Special', work_session: 'Work session', community: 'Town hall' };
   const ITEM_TYPES = { consent: ['Consent', ''], action: ['Action', 'blue'], discussion: ['Discussion', 'violet'], public_hearing: ['Public hearing', 'amber'], report: ['Report', ''] };
   const AGENDA = { draft: ['Agenda: draft', ''], ready: ['Agenda: awaiting approval', 'amber'], published: ['Agenda: published', 'green'] };
   const MINUTES = { none: ['No minutes yet', ''], draft: ['Minutes: draft', 'amber'], approved: ['Minutes: approved', 'green'] };
@@ -80,8 +80,10 @@
           <div class="grow">
             <div class="title">${esc(m.title || `${m.board}`)} <span class="faint">· ${esc(KINDS[m.kind])} meeting</span></div>
             <div class="meta">${esc(fmtWhen(m.starts_at))}${m.location ? ` · ${esc(m.location)}` : ''}</div>
-            <div class="mt-pills">${m.status !== 'scheduled' ? pill(STATUS, m.status) : ''}${pill(AGENDA, m.agenda_status)}${m.agenda_late ? '<span class="pill red">Published late</span>' : ''}
-              <span class="pill">${m.items} ${m.items === 1 ? 'item' : 'items'}</span>${m.minutes_status !== 'none' || local.tab === 'past' ? pill(MINUTES, m.minutes_status) : ''}
+            <div class="mt-pills">${m.external ? `<span class="pill violet">Another government</span>` : ''}${m.historical ? '<span class="pill">Past meeting, added later</span>' : m.status !== 'scheduled' ? pill(STATUS, m.status) : ''}
+              ${m.record_source ? `<span class="pill blue">Notes: ${esc(m.record_source)}</span>` : ''}
+              ${m.historical && !m.items ? '' : `${pill(AGENDA, m.agenda_status)}${m.agenda_late ? '<span class="pill red">Published late</span>' : ''}<span class="pill">${m.items} ${m.items === 1 ? 'item' : 'items'}</span>`}
+              ${m.minutes_status !== 'none' || (local.tab === 'past' && !m.external) ? pill(MINUTES, m.minutes_status) : ''}
               ${m.open_actions ? `<span class="pill violet">${m.open_actions} open action ${m.open_actions === 1 ? 'item' : 'items'}</span>` : ''}</div>
             ${warnHtml(m.warnings.filter((w) => w.level !== 'info' || m.submitted))}
           </div></a>`).join('') : noBoards ? '' : `<div class="card card-b">${emptyNote('calendar', local.tab === 'past' ? 'No past meetings yet.' : 'No upcoming meetings scheduled.')}</div>`}</div>`;
@@ -150,10 +152,10 @@
           ${m.purpose ? `<div style="margin-top:6px"><b>Purpose:</b> ${esc(m.purpose)}</div>` : ''}
           <div class="mt-pills">${pill(STATUS, m.status)}<span class="pill">${esc(KINDS[m.kind])}</span>${pill(AGENDA, m.agenda_status)}${pill(MINUTES, m.minutes_status)}</div>
         </div>
-        <div class="facts mt-facts">
+        ${m.historical || m.external ? `<div class="mt-note" style="flex-basis:100%;margin:0;background:var(--paper-2);color:var(--muted)">${icon('calendar')}<span>${m.external ? `The ${esc(m.board)} is another government's body. It is listed for residents' information; the city doesn't keep its agendas or minutes.` : 'A past meeting added after the fact, so there are no notice or minutes deadlines.'}</span></div>` : `<div class="facts mt-facts">
           <div class="fact"><small>Agenda due</small><b>${esc(fmtWhen(data.deadlines.agendaBy))}</b><small>${data.deadlines.agendaHours} ${data.deadlines.agendaHours === 1 ? 'hour' : 'hours'} before</small></div>
           <div class="fact"><small>Minutes due</small><b>${esc(wallDate(data.deadlines.minutesBy).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }))}</b><small>${data.rules.minutesDays} days after</small></div>
-        </div>
+        </div>`}
         ${can('meetings.manage') && m.status === 'scheduled' ? `<div class="mt-status">${started ? `<button class="btn btn-sm btn-dark" data-st="held">${icon('check')} Mark held</button>` : ''}
           <button class="btn btn-sm" data-st="postponed">Postpone</button><button class="btn btn-sm btn-danger" data-st="cancelled">Cancel meeting</button></div>`
           : can('meetings.manage') && m.status !== 'scheduled' ? `<div class="mt-status"><button class="btn btn-sm" data-st="scheduled">Set back to scheduled</button></div>` : ''}
@@ -161,6 +163,7 @@
       ${data.warnings.length ? `<div class="stack" style="gap:8px;margin-top:14px">${warnHtml(data.warnings)}</div>` : ''}
       <div class="cols cols-21" style="margin-top:16px">
         <div class="stack">
+          ${m.record_text ? '<div class="card" id="mtRecord"></div>' : ''}
           <div class="card" id="mtAgenda"></div>
           <div class="card" id="mtMinutes"></div>
         </div>
@@ -174,6 +177,7 @@
       if (st === 'cancelled' && !b.dataset.confirm) { b.dataset.confirm = '1'; b.textContent = 'Click again to cancel'; return; }
       try { await api(`/meetings/${id}`, { method: 'PATCH', body: { status: st } }); C().toast('Saved'); renderMeeting(page, id); } catch (e) { C().toast(e.message); }
     }));
+    if (m.record_text) drawRecord(data);
     drawAgenda(data);
     drawMinutes(data);
     drawActions(data);
@@ -183,6 +187,25 @@
   }
 
   const reload = () => renderMeeting(C().$('#page'), local.current.meeting.id);
+
+  /* ---------------- Record from another source ---------------- */
+
+  // A news recap or other account of the meeting. Residents see it labeled with its source; it is not the minutes.
+  function drawRecord(data) {
+    const { $, esc, icon, can, api, toast } = C();
+    const m = data.meeting;
+    $('#mtRecord').innerHTML = `
+      <div class="card-h"><h2>Meeting notes</h2><span class="pill blue">${esc(m.record_source)}</span>
+        ${m.record_url ? `<a class="btn btn-sm btn-ghost" style="margin-left:auto" href="${esc(m.record_url)}" target="_blank" rel="noopener">${icon('external')} Original</a>` : ''}</div>
+      <div class="card-b">
+        <div class="mt-warn info" style="margin:0 0 10px">${icon('alert')}<span>An account of the meeting by ${esc(m.record_source)}, not the official minutes. Residents see it labeled that way, and the AI City Clerk cites it as a news report.</span></div>
+        <details><summary class="section-title" style="cursor:pointer">Read the notes (${(m.record_text.split(/\s+/).length).toLocaleString()} words)</summary><div class="mt-preview" style="margin-top:8px">${doc(m.record_text)}</div></details>
+        ${can('meetings.manage') && m.minutes_status !== 'approved' && !m.external ? '<button class="btn btn-sm" id="recNotes" style="margin-top:10px">Use as notes for drafting minutes</button>' : ''}
+      </div>`;
+    $('#recNotes')?.addEventListener('click', async () => {
+      try { await api(`/meetings/${m.id}/notes`, { method: 'PUT', body: { notes: m.record_text } }); toast('Copied into the typed notes'); reload(); } catch (e) { toast(e.message); }
+    });
+  }
 
   /* ---------------- Agenda ---------------- */
 
@@ -676,7 +699,7 @@
       $('#bdNew').onclick = () => boardModal();
     }
     page.innerHTML = `${tabBar()}<div class="stack">${local.boards.length ? local.boards.map((b) => `
-      <div class="card" ${b.active ? '' : 'style="opacity:.6"'}><div class="card-h"><h2>${esc(b.name)}</h2><span class="pill">${esc(BOARD_KINDS[b.kind] || b.kind)}</span>${b.active ? '' : '<span class="pill">Inactive</span>'}
+      <div class="card" ${b.active ? '' : 'style="opacity:.6"'}><div class="card-h"><h2>${esc(b.name)}</h2><span class="pill">${esc(BOARD_KINDS[b.kind] || b.kind)}</span>${b.external ? '<span class="pill violet">Another government</span>' : ''}${b.active ? '' : '<span class="pill">Inactive</span>'}
         ${manage ? `<div style="margin-left:auto;display:flex;gap:8px"><button class="btn btn-sm" data-bedit="${b.id}">${icon('pen')} Edit</button><button class="btn btn-sm" data-madd="${b.id}">${icon('plus')} Add member</button></div>` : ''}</div>
         <div class="card-b">
           ${b.schedule || b.location ? `<p class="muted" style="margin:0 0 10px">${esc([b.schedule, b.location].filter(Boolean).join(' · '))}</p>` : ''}
@@ -702,10 +725,12 @@
       <label class="field"><span>Regular meeting schedule</span><input class="input" id="bdSched" value="${esc(b?.schedule || '')}" placeholder="e.g. First and third Tuesday of each month, 6 pm"><small>The schedule recorded in the minutes. Meetings on it are regular meetings.</small></label>
       <label class="field"><span>Usual meeting place</span><input class="input" id="bdLoc" value="${esc(b?.location || '')}" placeholder="e.g. City Hall boardroom"></label>
       <label class="field"><span>Description</span><textarea class="textarea" id="bdDesc" rows="2">${esc(b?.description || '')}</textarea></label>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="bdExternal" ${b?.external ? 'checked' : ''}> Another government's body (for example the county board of supervisors)</label>
+      <small class="faint">Listed for residents' information, without notice or minutes deadlines for the clerk.</small>
       <div class="row">${b ? `<button class="btn ${b.active ? 'btn-danger' : ''}" id="bdActive" style="margin-right:auto">${b.active ? 'Mark inactive' : 'Reactivate'}</button>` : ''}
         <button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="bdSave">${b ? 'Save' : 'Add board'}</button></div>`);
     const save = async (extra = {}) => {
-      const body = { name: md.querySelector('#bdName').value, kind: md.querySelector('#bdKind').value, schedule: md.querySelector('#bdSched').value, location: md.querySelector('#bdLoc').value, description: md.querySelector('#bdDesc').value, ...extra };
+      const body = { name: md.querySelector('#bdName').value, kind: md.querySelector('#bdKind').value, schedule: md.querySelector('#bdSched').value, location: md.querySelector('#bdLoc').value, description: md.querySelector('#bdDesc').value, external: md.querySelector('#bdExternal').checked, ...extra };
       if (!body.name.trim()) { md.querySelector('#bdName').focus(); return; }
       try { if (b) await api(`/meetings/boards/${b.id}`, { method: 'PATCH', body }); else await api('/meetings/boards', { method: 'POST', body }); md.remove(); toast('Saved'); await lookups(); renderBoards(C().$('#page')); } catch (e) { toast(e.message); }
     };
