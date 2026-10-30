@@ -33,6 +33,14 @@
     check: '<path d="M20 6 9 17l-5-5"/>',
     build: '<path d="M3 21h18M5 21V10l7-5 7 5v11"/><path d="M9 21v-6h6v6"/>',
     copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
+    home: '<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
+    store: '<path d="M4 9h16l-1-5H5L4 9Z"/><path d="M5 9v11h14V9"/><path d="M4 9a2.7 2.7 0 0 0 5.3 0 2.7 2.7 0 0 0 5.4 0 2.7 2.7 0 0 0 5.3 0"/><path d="M10 20v-5h4v5"/>',
+    sign: '<rect x="3" y="4" width="18" height="10" rx="1.5"/><path d="M8 14v7M16 14v7M7 9h10"/>',
+    map: '<path d="m9 4-6 2.5v13.5l6-2.5 6 2.5 6-2.5V4l-6 2.5L9 4Z"/><path d="M9 4v13.5M15 6.5V20"/>',
+    plug: '<path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0V8Z"/><path d="M12 17v5"/>',
+    ruler: '<path d="m3 17 14-14 4 4L7 21l-4-4Z"/><path d="m7 13 2 2M10 10l2 2M13 7l2 2"/>',
+    clipboard: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 11h6M9 15h4"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
     phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2Z"/>',
   };
   const icon = (n, size = 18) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -40,9 +48,9 @@
   const VERIFY_NOTE = { historical: 'Historical', secondary: 'News report', unverified: 'Needs confirmation', official_unverified: 'Published version' };
   const STATUS = { new: 'Received', needs_info: 'Needs information', assigned: 'Assigned to a crew', in_progress: 'In progress', awaiting_review: 'Awaiting review', resolved: 'Resolved', closed: 'Closed' };
   const STEPS = ['new', 'assigned', 'in_progress', 'resolved'];
-  const PERMIT_STATUS = { submitted: 'Submitted', needs_info: 'Changes requested', fees_due: 'Complete · fee due', in_review: 'Under review', issued: 'Permit issued', closed: 'Closed', denied: 'Not approved', withdrawn: 'Withdrawn', draft: 'Draft' };
+  const PERMIT_STATUS = { submitted: 'Submitted', needs_info: 'Changes requested', fees_due: 'Complete · fee due', in_review: 'Under review', issued: 'Approved', closed: 'Closed', denied: 'Not approved', withdrawn: 'Withdrawn', draft: 'Draft' };
   const PERMIT_STEPS = ['submitted', 'fees_due', 'in_review', 'issued'];
-  const REF = /\b[A-Z]{2,5}-(?:BP-)?\d{4,6}\b/i;
+  const REF = /\b[A-Z]{2,5}-(?:[A-Z]{2}-)?\d{4,6}\b/i;
 
   const CSS = `
   :host { all: initial; }
@@ -104,6 +112,14 @@
   .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .tiles.four { grid-template-columns: repeat(2, 1fr); }
   .tiles.four .tile { grid-template-columns: 34px 1fr; justify-items: start; text-align: left; align-items: center; padding: 10px; }
+  .formlist { display: grid; gap: 8px; }
+  .formitem { display: grid; grid-template-columns: 38px 1fr auto; gap: 10px; align-items: center; width: 100%; text-align: left; padding: 11px 12px; border-radius: 14px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+  .formitem:hover { border-color: var(--brand); }
+  .formitem > span:first-child { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: color-mix(in srgb, var(--brand) 12%, #fff); color: var(--brand); }
+  .formitem b { display: block; font-size: 14px; } .formitem small { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.35; margin-top: 2px; }
+  .formitem .go { color: var(--brand); font-weight: 650; font-size: 13px; white-space: nowrap; }
+  .who { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .who button { border: 0; background: none; color: var(--brand); font-weight: 650; cursor: pointer; padding: 0; }
   .resume { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; margin-top: 10px; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--brand);
     background: color-mix(in srgb, var(--brand) 6%, #fff); cursor: pointer; }
   .resume b { display: block; font-size: 13.5px; } .resume small { color: var(--muted); font-size: 12px; }
@@ -159,6 +175,34 @@
   };
   const persist = () => store.save({ convoId: state.convoId, items: state.items.slice(-40), flow: state.flow ? { ...state.flow, photo: null } : null, open: state.open, nudged: saved.nudged, permit: state.permit });
   const permitList = () => { try { return JSON.parse(localStorage.getItem(`chos:${CITY}:permit:list`)) || []; } catch { return []; } };
+  const formInfo = (kind) => (cfg?.forms || []).find((x) => x.kind === kind) || null;
+
+  // Resident sign-in with a phone number and a texted code. The session token stays on this device; applications
+  // follow the resident to any device they sign in on.
+  const ACCOUNT_KEY = `chos:${CITY}:me`;
+  const account = {
+    get() { try { return JSON.parse(localStorage.getItem(ACCOUNT_KEY)); } catch { return null; } },
+    set(v) { try { if (v) localStorage.setItem(ACCOUNT_KEY, JSON.stringify(v)); else localStorage.removeItem(ACCOUNT_KEY); } catch { /* storage unavailable */ } },
+    token() { return account.get()?.token || null; },
+    profile() { return account.get()?.profile || null; },
+    signedIn() { return !!account.token(); },
+    async api(path, { method = 'GET', body } = {}) {
+      const res = await fetch(`${API}/me${path}`, { method, headers: { ...(account.token() ? { 'X-Resident-Token': account.token() } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 && account.token()) account.set(null);
+      if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong. Please try again.'), { status: res.status });
+      return data;
+    },
+    sendCode: (phone) => account.api('/code', { method: 'POST', body: { phone } }),
+    async verify(phone, code) {
+      const r = await account.api('/verify', { method: 'POST', body: { phone, code } });
+      account.set({ token: r.token, profile: r.profile });
+      // Applications started on this device before signing in join the account.
+      await account.api('/claim', { method: 'POST', body: { applications: permitList().map(({ id, token }) => ({ id, token })) } }).catch(() => {});
+      return r.profile;
+    },
+    async signOut() { await account.api('/logout', { method: 'POST' }).catch(() => {}); account.set(null); },
+  };
   let photoFile = null;
 
   const host = document.createElement('div');
@@ -184,6 +228,7 @@
       .replace(/\b(\d{3}-\d{3}-\d{4})\b/g, '<a href="tel:$1">$1</a>')
       .replace(/\[(\d+(?:\s*[,–-]\s*\d+)*)\]/g, (_, inner) => inner.split(/\s*,\s*/).map((n) => {
         const s = byN.get(Number(n));
+        if (s?.form) return `<a class="cite" href="#" data-act="form" data-kind="${esc(s.form)}" title="Fill out the ${esc(s.title)} online">${esc(n)}</a>`;
         return s?.url ? `<a class="cite" href="${esc(absolute(s.url))}" target="_blank" rel="noopener" title="${esc(s.title)}">${esc(n)}</a>` : '';
       }).join(''));
     const out = [];
@@ -264,12 +309,13 @@
     const welcome = `<div class="welcome">
         <p>${md(cfg.greeting)}</p>
         <div class="tiles ${cfg.permits ? 'four' : ''}">
-          ${cfg.permits ? `<button class="tile" data-act="permit"><span>${icon('build')}</span>Apply for a construction permit</button>` : ''}
-          <button class="tile" data-act="forms"><span>${icon('file')}</span>Permits &amp; forms</button>
+          ${cfg.permits ? `<button class="tile" data-act="forms"><span>${icon('file')}</span>Apply for a permit or license</button>
+          <button class="tile" data-act="mine"><span>${icon('user')}</span>My applications</button>` : ''}
           <button class="tile" data-act="report"><span>${icon('alert')}</span>Report an issue</button>
           <button class="tile" data-act="track"><span>${icon('search')}</span>Track a request</button>
         </div>
         ${resumeCards()}
+        ${cfg.permits && account.signedIn() ? `<div class="who">${icon('user', 14)} Signed in as ${esc(account.profile()?.phone || '')} · <button data-act="sign-out">Sign out</button></div>` : ''}
       </div>
       ${state.items.length ? '' : `<div class="chips">${(cfg.suggestions || []).map((s) => `<button class="chip" data-ask="${esc(s)}">${esc(s)}</button>`).join('')}</div>`}`;
     log.innerHTML = welcome + state.items.map(itemHtml).join('');
@@ -280,9 +326,9 @@
   function resumeCards() {
     if (!cfg.permits) return '';
     return permitList().filter((x) => x.status !== 'withdrawn').slice(0, 2).map((x) => `
-      <button class="resume" data-act="permit-resume" data-id="${esc(x.id)}"><span style="color:var(--brand)">${icon('build', 22)}</span>
-        <span style="flex:1;min-width:0"><b>${x.status === 'draft' ? 'Continue your permit application' : `Permit application ${esc(x.ref || '')}`}</b>
-        <small>${esc(x.address || 'Construction permit')} · ${x.status === 'draft' ? `${Number(x.progress) || 0}% done` : esc(PERMIT_STATUS[x.status] || x.status)}</small>
+      <button class="resume" data-act="permit-resume" data-id="${esc(x.id)}"><span style="color:var(--brand)">${icon(formInfo(x.kind || 'construction')?.icon || 'file', 22)}</span>
+        <span style="flex:1;min-width:0"><b>${x.status === 'draft' ? `Continue your ${esc((x.title || 'construction permit').toLowerCase())} application` : `${esc(x.title || 'Application')} ${esc(x.ref || '')}`}</b>
+        <small>${esc(x.address || x.title || 'Application')} · ${x.status === 'draft' ? `${Number(x.progress) || 0}% done` : esc(PERMIT_STATUS[x.status] || x.status)}</small>
         ${x.status === 'draft' ? `<div class="bar"><i style="width:${Number(x.progress) || 0}%"></i></div>` : ''}</span></button>`).join('');
   }
 
@@ -291,15 +337,17 @@
     if (it.kind === 'card') return `<div class="card">${it.html}</div>`;
     const f = it.flags || {};
     const cited = new Set(it.cited || []);
-    const shown = (it.sources || []).filter((s) => s.n > 1 && cited.has(s.n) && s.url);
+    const shown = (it.sources || []).filter((s, k, all) => s.n > 1 && cited.has(s.n) && s.url && !(s.form && all.findIndex((x) => x.form === s.form && cited.has(x.n)) < k));
     return `<div class="msg bot ${f.emergency ? 'emergency' : ''}" data-i="${i}">
       ${it.pending && !it.text ? '<span class="typing"><i></i><i></i><i></i></span>' : md(it.text, it.sources)}
-      ${shown.length ? `<div class="sources"><div class="sources-label">Sources</div>${shown.map((s) => `
+      ${shown.length ? `<div class="sources"><div class="sources-label">Sources</div>${shown.map((s) => (s.form ? `
+        <a class="src" href="#" data-act="form" data-kind="${esc(s.form)}"><span class="n">${s.n}</span><span><strong>${esc(formInfo(s.form)?.short || s.title)}</strong>
+        <small>Fill it out online, right here</small></span></a>` : `
         <a class="src" href="${esc(absolute(s.url))}" target="_blank" rel="noopener"><span class="n">${s.n}</span><span><strong>${esc(s.title)}</strong>
-        <small>${esc(s.category || '')}${s.as_of ? ` · ${esc(s.as_of)}` : ''}${VERIFY_NOTE[s.verification] && s.verification !== 'official_unverified' ? `<span class="tag">${VERIFY_NOTE[s.verification]}</span>` : ''}</small></span></a>`).join('')}</div>` : ''}
+        <small>${esc(s.category || '')}${s.as_of ? ` · ${esc(s.as_of)}` : ''}${VERIFY_NOTE[s.verification] && s.verification !== 'official_unverified' ? `<span class="tag">${VERIFY_NOTE[s.verification]}</span>` : ''}</small></span></a>`)).join('')}</div>` : ''}
       ${f.emergency ? `<div class="actions"><a class="btn danger" href="tel:911">${icon('phone', 15)} Call 911</a></div>` : ''}
       ${f.offerReport && !it.reported ? `<div class="actions"><button class="btn primary" data-act="report-from" data-i="${i}">${icon('alert', 15)} Report this issue</button></div>` : ''}
-      ${f.offerPermit && cfg.permits ? `<div class="actions"><button class="btn primary" data-act="permit-from" data-i="${i}">${icon('build', 15)} Start my permit application</button></div>` : ''}
+      ${f.offerForm && formInfo(f.offerForm) ? `<div class="actions"><button class="btn primary" data-act="form-from" data-kind="${esc(f.offerForm)}" data-i="${i}">${icon(formInfo(f.offerForm).icon, 15)} Start my ${esc(formInfo(f.offerForm).short.toLowerCase())} application</button></div>` : ''}
       ${f.needsStaff ? `<div class="note">${icon('check', 14)} Flagged for City Hall staff to follow up.</div>` : ''}
       ${it.buttons ? `<div class="actions">${it.buttons}</div>` : ''}
     </div>`;
@@ -333,14 +381,16 @@
     else if (a === 'gps') useLocation();
     else if (a === 'photo') pickPhoto();
     else if (a === 'submit') submitReport();
-    else if (a === 'permit') openPermit({});
-    else if (a === 'permit-from') {
+    else if (a === 'form') { e.preventDefault(); openPermit({ kind: act.dataset.kind }); }
+    else if (a === 'form-from') {
       const q = [...state.items].slice(0, Number(act.dataset.i)).reverse().find((x) => x.role === 'user');
-      openPermit({ opening: q?.text });
+      openPermit({ kind: act.dataset.kind, opening: q?.text });
     } else if (a === 'permit-resume') {
-      const x = permitList().find((p) => p.id === act.dataset.id);
+      const x = permitList().find((p) => p.id === act.dataset.id) || mine.find((p) => p.id === act.dataset.id);
       if (x) openPermit({ permit: { id: x.id, token: x.token } });
-    }
+    } else if (a === 'mine') showMine();
+    else if (a === 'sign-in') startSignIn();
+    else if (a === 'sign-out') { account.signOut().then(() => { bot("You're signed out on this device."); }); }
     else if (a === 'cancel-flow') cancelFlow();
   }
 
@@ -351,10 +401,11 @@
     if (!h) return;
     const f = state.flow;
     h.hidden = !f;
-    if (f) h.innerHTML = `${f.name === 'track' ? 'Checking a request' : 'Reporting an issue'} · <button type="button" id="cancelFlow">Cancel</button>`;
+    if (f) h.innerHTML = `${f.name === 'track' ? 'Checking a request' : f.name === 'signin' ? 'Signing in with your phone' : 'Reporting an issue'} · <button type="button" id="cancelFlow">Cancel</button>`;
     h.querySelector('#cancelFlow')?.addEventListener('click', cancelFlow);
     const input = root.querySelector('#input');
-    if (input) input.placeholder = f?.name === 'report' ? ({ location: 'Street address, intersection or landmark', details: 'Add details, or type "skip"', contact: 'Name and phone or email, or "skip"' }[f.step] || 'Type your answer') : f?.name === 'track' ? 'e.g. WIG-1001' : 'Ask a question or describe a problem…';
+    if (input) input.setAttribute('inputmode', f?.name === 'signin' ? (f.step === 'code' ? 'numeric' : 'tel') : 'text');
+    if (input) input.placeholder = f?.name === 'signin' ? (f.step === 'code' ? '6-digit code' : 'Your cell number') : f?.name === 'report' ? ({ location: 'Street address, intersection or landmark', details: 'Add details, or type "skip"', contact: 'Name and phone or email, or "skip"' }[f.step] || 'Type your answer') : f?.name === 'track' ? 'e.g. WIG-1001' : 'Ask a question or describe a problem…';
   }
 
   function cancelFlow() { state.flow = null; photoFile = null; persist(); bot('No problem. What else can I help with?'); drawFlowHint(); }
@@ -363,7 +414,8 @@
 
   async function handleInput(text) {
     if (state.flow?.name === 'report' && state.flow.step !== 'confirm') { push({ role: 'user', text }); flowAnswer(text); return; }
-    if (state.flow?.name === 'track' || REF.test(text) && /status|track|update|where|check|^\s*[A-Z]{2,5}-(BP-)?\d+\s*$/i.test(text)) {
+    if (state.flow?.name === 'signin') { push({ role: 'user', text: state.flow.step === 'code' ? '••••••' : text }); signInAnswer(text); return; }
+    if (state.flow?.name === 'track' || REF.test(text) && /status|track|update|where|check|^\s*[A-Z]{2,5}-([A-Z]{2}-)?\d+\s*$/i.test(text)) {
       push({ role: 'user', text });
       const ref = (text.match(REF) || [text.trim()])[0];
       state.flow = null; persist(); drawFlowHint();
@@ -410,19 +462,76 @@
   /* ---------------- Forms ---------------- */
 
   async function showForms() {
-    push({ role: 'user', text: 'Show me permits and forms' });
+    push({ role: 'user', text: 'Show me applications and forms' });
+    const forms = cfg.forms?.length ? await fetch(`${API}/forms`).then((r) => r.json()).then((r) => r.forms).catch(() => null) : [];
+    if (!forms) { bot(`I couldn't load the list of applications. Call City Hall at ${cfg.phone}.`); return; }
+    card(`<h3>Apply online</h3><div style="font-size:13px;color:var(--muted)">Fill out any of these right here, on your phone or computer. I'll walk you through it one question at a time and explain anything that's confusing.</div>
+      <div class="formlist">${forms.map((f) => `
+        <button class="formitem" data-act="form" data-kind="${esc(f.kind)}"><span>${icon(f.icon, 19)}</span><span><b>${esc(f.short)}</b><small>${esc(f.intro.split(/(?<=[.!?])\s/)[0])}${f.fee != null ? ` ${f.fee ? `Fee: $${Number(f.fee).toLocaleString()}.` : 'No fee.'}` : ''}</small></span><span class="go">Start</span></button>`).join('')}</div>
+      <div style="font-size:13px;color:var(--muted)">Not sure which one you need? Describe your project, like "I want to put up a sign for my shop", and I'll point you to the right one.</div>`);
+  }
+
+  /* ---------------- My applications ---------------- */
+
+  let mine = [];
+  async function showMine() {
+    push({ role: 'user', text: 'My applications' });
+    const row = (x) => `<button class="formitem" data-act="permit-resume" data-id="${esc(x.id)}"><span>${icon(formInfo(x.kind || 'construction')?.icon || 'file', 19)}</span>
+      <span><b>${esc(x.title || formInfo(x.kind)?.short || 'Application')}${x.ref ? ` · ${esc(x.ref)}` : ''}</b><small>${esc(x.address || '')}${x.address ? ' · ' : ''}${x.status === 'draft' ? `${Number(x.progress) || 0}% done` : esc(PERMIT_STATUS[x.status] || x.status)}</small></span><span class="go">${x.status === 'draft' ? 'Continue' : 'Open'}</span></button>`;
+    if (account.signedIn()) {
+      const item = bot('', { pending: true });
+      try {
+        const r = await account.api('');
+        state.items.pop();
+        mine = r.applications;
+        card(`<h3>My applications</h3><div style="font-size:13px;color:var(--muted)">Signed in as ${esc(r.profile.phone)}.</div>
+          <div class="formlist">${mine.map(row).join('') || '<div style="font-size:13.5px">No applications yet.</div>'}</div>
+          <div class="actions"><button class="btn primary" data-act="forms">${icon('file', 15)} Start a new application</button><button class="btn" data-act="sign-out">Sign out</button></div>`);
+      } catch (e) {
+        state.items.pop();
+        if (e.status === 401) showMine(); else bot(e.message);
+      }
+      return;
+    }
+    const local = permitList().filter((x) => x.status !== 'withdrawn');
+    card(`<h3>My applications</h3>
+      ${local.length ? `<div style="font-size:13px;color:var(--muted)">Started on this device:</div><div class="formlist">${local.map(row).join('')}</div>` : '<div style="font-size:13.5px">Nothing started on this device yet.</div>'}
+      <div style="font-size:13.5px">Sign in with your phone number to save your applications and open them on any phone or computer. No password: I'll text you a code.</div>
+      <div class="actions"><button class="btn primary" data-act="sign-in">${icon('phone', 15)} Sign in with my phone</button><button class="btn" data-act="forms">Start an application</button></div>`);
+  }
+
+  function startSignIn() {
+    state.flow = { name: 'signin', step: 'phone' }; persist();
+    bot("What's your cell phone number? I'll text you a 6-digit code.");
+    drawFlowHint(); focusInput();
+  }
+
+  async function signInAnswer(text) {
+    const f = state.flow;
+    busy = true;
     const item = bot('', { pending: true });
     try {
-      const { forms } = await fetch(`${API}/forms`).then((r) => r.json());
-      item.pending = false;
+      if (f.step === 'phone') {
+        const r = await account.sendCode(text);
+        state.items.pop();
+        state.flow = { name: 'signin', step: 'code', phone: text }; persist();
+        bot(`I texted a code to **${esc(r.phone)}**. Type it here.${r.devCode ? ` (Test mode, no texts are sent: your code is **${r.devCode}**.)` : ''}`);
+      } else {
+        const profile = await account.verify(f.phone, text);
+        state.items.pop();
+        state.flow = null; persist();
+        bot(`You're signed in as **${esc(profile.phone)}**. Your applications are saved to your account, so you can open them on any device.`);
+        busy = false; drawFlowHint();
+        showMine();
+        return;
+      }
+    } catch (e) {
       state.items.pop();
-      card(`<h3>Permits &amp; forms</h3><div class="forms">${forms.map((f) => `
-        <a class="src" href="${esc(absolute(f.url))}" target="_blank" rel="noopener"><span class="n">${icon('file', 12)}</span><span><strong>${esc(f.title)}</strong>
-        <small>${f.as_of ? `${esc(f.as_of)} · ` : ''}PDF${f.verification === 'historical' ? '<span class="tag">Historical</span>' : ''}</small></span></a>`).join('')}</div>
-        <div style="font-size:13px;color:var(--muted)">Not sure which one you need? Describe your project, like "I want to build a garage", and I'll point you to the right form.</div>`);
-    } catch {
-      item.pending = false; item.text = `I couldn't load the forms list. Call City Hall at ${cfg.phone}.`; persist(); drawLog();
+      bot(e.message);
+      if (e.status === 503) { state.flow = null; persist(); }
     }
+    busy = false;
+    drawFlowHint(); focusInput();
   }
 
   /* ---------------- Track ---------------- */
@@ -436,14 +545,14 @@
       if (!res.ok) { bot(`I couldn't find a request numbered **${ref.toUpperCase()}**. Check the number and try again, or call City Hall at ${cfg.phone}.`); return; }
       if (r.type === 'permit') {
         const at = PERMIT_STEPS.indexOf(r.status === 'closed' ? 'issued' : r.status === 'needs_info' ? 'submitted' : r.status);
-        const mine = permitList().find((x) => x.ref === r.ref);
+        const mineHere = permitList().find((x) => x.ref === r.ref);
         card(`<div class="ref">${esc(r.ref)}</div><h3>${esc(PERMIT_STATUS[r.status] || r.status)}</h3>
           ${at >= 0 ? `<div class="progress">${PERMIT_STEPS.map((s, i) => `<i class="${i <= at ? 'on' : ''}"></i>`).join('')}</div>` : ''}
-          <div class="row"><b>Type</b><span>Construction permit</span></div>
-          ${r.permit_number ? `<div class="row"><b>Permit no.</b><span>${esc(r.permit_number)}</span></div>` : ''}
+          <div class="row"><b>Type</b><span>${esc(formInfo(r.kind)?.short || 'Application')}</span></div>
+          ${r.permit_number ? `<div class="row"><b>Number</b><span>${esc(r.permit_number)}</span></div>` : ''}
           <div class="row"><b>Submitted</b><span>${r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '—'}</span></div>
           <div class="row"><b>Last update</b><span>${new Date(r.updated_at).toLocaleString()}</span></div>
-          ${mine ? `<div class="actions"><button class="btn primary" data-act="permit-resume" data-id="${esc(mine.id)}">${icon('build', 15)} Open my application</button></div>` : ''}`);
+          ${mineHere ? `<div class="actions"><button class="btn primary" data-act="permit-resume" data-id="${esc(mineHere.id)}">${icon('file', 15)} Open my application</button></div>` : ''}`);
         return;
       }
       const at = Math.max(0, STEPS.indexOf(r.status === 'closed' ? 'resolved' : r.status === 'needs_info' ? 'new' : r.status === 'awaiting_review' ? 'in_progress' : r.status));
@@ -577,27 +686,36 @@
   /* ---------------- Permit applications (permit.js, loaded on demand) ---------------- */
 
   let permitScript = null;
-  function openPermit({ permit = null, opening = '' }) {
-    state.permit = { ...(permit || {}), active: true };
+  function openPermit({ permit = null, opening = '', kind = null }) {
+    kind = kind || permit?.kind || 'construction';
+    state.permit = { ...(permit || {}), kind, active: true };
     if (!state.open) { state.open = true; persist(); render(); return; }
     persist();
     permitScript = permitScript || new Promise((resolve, reject) => {
       const el = document.createElement('script');
-      el.src = `${ORIGIN}/permit.js?v=6`; el.async = true; el.onload = resolve; el.onerror = reject;
+      el.src = `${ORIGIN}/permit.js?v=7`; el.async = true; el.onload = resolve; el.onerror = reject;
       document.head.appendChild(el);
     });
     permitScript.then(() => window.__chosPermit.mount({
       root, api: API, origin: ORIGIN, city: CITY, cfg, esc, md, icon, cityName: cfg.cityName, phone: cfg.phone,
-      permit: permit?.id ? permit : null, opening, convoId: state.convoId,
-      onChange: (x) => { state.permit = { id: x.id, token: x.token, active: true }; persist(); },
+      permit: permit?.id ? permit : null, kind, opening, convoId: state.convoId, account,
+      openForm: (k) => openPermit({ kind: k }),
+      onChange: (x) => { state.permit = { id: x.id, token: x.token, kind: x.kind, active: true }; persist(); },
       onClose: () => { state.permit = { ...state.permit, active: false }; persist(); render(); },
-    })).catch(() => { permitScript = null; state.permit = null; persist(); render(); bot(`The permit application couldn't load. Please try again, or call City Hall at ${cfg.phone}.`); });
+    })).catch(() => { permitScript = null; state.permit = null; persist(); render(); bot(`The application couldn't load. Please try again, or call City Hall at ${cfg.phone}.`); });
   }
 
   // A secret application link (from an email or text) opens that application directly.
   const linked = location.hash.match(/#permit=(p[a-f0-9]{12})\.([\w-]{16,64})/);
   if (linked) {
     state.permit = { id: linked[1], token: linked[2], active: true };
+    state.open = true; persist();
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+  // A link on the city's website can start an application directly: #apply=variance.
+  const apply = location.hash.match(/#apply=([a-z_]+)/);
+  if (apply && !linked) {
+    state.permit = { kind: apply[1], active: true };
     state.open = true; persist();
     history.replaceState(null, '', location.pathname + location.search);
   }

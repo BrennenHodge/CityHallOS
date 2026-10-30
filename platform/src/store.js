@@ -275,6 +275,35 @@ const MIGRATIONS = [
   CREATE INDEX outbox_entity ON outbox (entity_type, entity_id, id);
   INSERT OR IGNORE INTO meta (key, value) VALUES ('permit_seq', '1000');
   `,
+  `
+  -- Residents who sign in with their phone number. Applications they start (or open while signed in) are theirs,
+  -- so My applications works on any device. Codes and sessions are stored as SHA-256 hashes.
+  CREATE TABLE residents (
+    id TEXT PRIMARY KEY,
+    phone TEXT NOT NULL UNIQUE,
+    name TEXT,
+    email TEXT,
+    mailing TEXT,
+    created_at TEXT NOT NULL,
+    seen_at TEXT NOT NULL
+  );
+  CREATE TABLE resident_codes (
+    phone TEXT PRIMARY KEY,
+    code_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    sent INTEGER NOT NULL DEFAULT 1,
+    window_start TEXT NOT NULL
+  );
+  CREATE TABLE resident_sessions (
+    token_hash TEXT PRIMARY KEY,
+    resident_id TEXT NOT NULL REFERENCES residents(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  ALTER TABLE permits ADD COLUMN resident_id TEXT REFERENCES residents(id);
+  CREATE INDEX permits_resident ON permits (resident_id, updated_at);
+  `,
 ];
 
 const PERMIT_JSON = ['data', 'asked', 'screen', 'checks', 'review', 'contact'];
@@ -468,11 +497,6 @@ export class CityStore extends DurableObject {
     return doc;
   }
 
-  listForms() {
-    return this.all(`SELECT id, title, notes, as_of, source_url, verification, file_key IS NOT NULL AS has_file FROM documents
-      WHERE visibility = 'public' AND status = 'ready' AND category = 'Permits & Forms' AND source_url LIKE '%DocumentCenter%' ORDER BY title`);
-  }
-
   // BM25 candidates for the reranker. Title matches count most, then headings, then body text.
   searchChunks(match, { includeInternal = false, limit = 40 } = {}) {
     const vis = includeInternal ? '' : "AND d.visibility = 'public'";
@@ -635,11 +659,11 @@ export class CityStore extends DurableObject {
 
   /* ---------------- Permit applications ---------------- */
 
-  createPermit({ id, tokenHash, kind, data, convoId }) {
+  createPermit({ id, tokenHash, kind, data, convoId, residentId = null }) {
     const t = now();
     const convo = convoId && this.one('SELECT id FROM conversations WHERE id = ?', convoId) ? convoId : null;
-    this.run('INSERT INTO permits (id, kind, token_hash, data, convo_id, created_at, updated_at, applicant_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      id, kind, tokenHash, JSON.stringify(data || {}), convo, t, t, t);
+    this.run('INSERT INTO permits (id, kind, token_hash, data, convo_id, resident_id, created_at, updated_at, applicant_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, kind, tokenHash, JSON.stringify(data || {}), convo, residentId, t, t, t);
     this.run("INSERT INTO permit_events (permit_id, at, actor_type, actor_name, kind, status, note, public) VALUES (?, ?, 'resident', 'Applicant', 'status', 'draft', 'Application started', 1)", id, t);
     return this.permit(id);
   }
@@ -694,21 +718,22 @@ export class CityStore extends DurableObject {
   }
 
   // Gives the application its reference number the first time it is submitted.
-  submitPermit(id, prefix, actor) {
+  // code: the form's reference prefix (BP construction permit, VA variance, ...).
+  submitPermit(id, prefix, actor, { code = 'BP', title = 'application' } = {}) {
     return this.tx(() => {
       const p = this.permitRow(id);
       let ref = p.ref;
       if (!ref) {
         const n = Number(this.one("SELECT value FROM meta WHERE key = 'permit_seq'").value) + 1;
         this.run("UPDATE meta SET value = ? WHERE key = 'permit_seq'", String(n));
-        ref = `${prefix}-BP-${n}`;
+        ref = `${prefix}-${code}-${n}`;
       }
       const t = now();
       const again = p.status === 'needs_info';
       this.run("UPDATE permits SET ref = ?, status = 'submitted', submitted_at = ?, updated_at = ?, applicant_at = ? WHERE id = ?", ref, t, t, t, id);
       this.permitEvent(id, { actor, kind: 'status', status: 'submitted', note: again ? 'Corrections submitted by the applicant' : 'Application submitted', isPublic: true });
       this.log(actor, again ? 'permit.resubmit' : 'permit.submit', 'permit', ref,
-        `${ref} ${again ? 'resubmitted with corrections' : 'submitted'}: ${String(p.data.description || 'construction permit').slice(0, 80)}${p.address ? ` at ${p.address}` : ''}`);
+        `${ref} ${again ? 'resubmitted with corrections' : 'submitted'}: ${title}${p.address ? ` at ${p.address}` : ''}`);
       return this.permit(id);
     });
   }
@@ -746,10 +771,72 @@ export class CityStore extends DurableObject {
     this.log(actor, 'permit.assign', 'permit', p.ref, `${p.ref}: assigned to ${name}`, { assignee_id: [p.assignee_id, assigneeId] });
   }
 
-  listPermits({ status } = {}) {
-    const rows = status ? this.all(`${PERMIT_LIST} WHERE p.status = ? ORDER BY p.updated_at DESC LIMIT 300`, status)
-      : this.all(`${PERMIT_LIST} WHERE p.status != 'draft' ORDER BY p.updated_at DESC LIMIT 300`);
-    return rows.map(parsePermit);
+  listPermits({ status, kind } = {}) {
+    const where = [status ? 'p.status = ?' : "p.status != 'draft'", ...(kind ? ['p.kind = ?'] : [])];
+    return this.all(`${PERMIT_LIST} WHERE ${where.join(' AND ')} ORDER BY p.updated_at DESC LIMIT 300`, ...[status, kind].filter(Boolean)).map(parsePermit);
+  }
+
+  /* ---------------- Residents (phone sign-in) ---------------- */
+
+  // A sign-in code for a phone number. At most 5 codes an hour per number.
+  saveResidentCode(phone, codeHash) {
+    return this.tx(() => {
+      const t = Date.now();
+      const row = this.one('SELECT * FROM resident_codes WHERE phone = ?', phone);
+      const fresh = !row || Date.parse(row.window_start) < t - 36e5;
+      if (!fresh && row.sent >= 5) return false;
+      this.run(`INSERT INTO resident_codes (phone, code_hash, expires_at, attempts, sent, window_start) VALUES (?, ?, ?, 0, ?, ?)
+        ON CONFLICT (phone) DO UPDATE SET code_hash = excluded.code_hash, expires_at = excluded.expires_at, attempts = 0, sent = excluded.sent, window_start = excluded.window_start`,
+      phone, codeHash, new Date(t + 10 * 6e4).toISOString(), fresh ? 1 : row.sent + 1, fresh ? new Date(t).toISOString() : row.window_start);
+      return true;
+    });
+  }
+
+  // Checks a code; five wrong tries uses it up. Returns the resident (created on first sign-in) or null.
+  verifyResidentCode(phone, codeHash) {
+    return this.tx(() => {
+      const row = this.one('SELECT * FROM resident_codes WHERE phone = ?', phone);
+      if (!row || row.attempts >= 5 || Date.parse(row.expires_at) < Date.now()) return null;
+      if (row.code_hash !== codeHash) { this.run('UPDATE resident_codes SET attempts = attempts + 1 WHERE phone = ?', phone); return null; }
+      this.run("UPDATE resident_codes SET attempts = 5, expires_at = '1970-01-01T00:00:00Z' WHERE phone = ?", phone);
+      let r = this.one('SELECT * FROM residents WHERE phone = ?', phone);
+      if (!r) {
+        const id = `r${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+        this.run('INSERT INTO residents (id, phone, created_at, seen_at) VALUES (?, ?, ?, ?)', id, phone, now(), now());
+        this.log({ type: 'resident', name: 'Resident' }, 'resident.signup', 'resident', id, 'A resident created an account with their phone number');
+        r = this.one('SELECT * FROM residents WHERE id = ?', id);
+      }
+      return this.parseResident(r);
+    });
+  }
+
+  parseResident(r) { return r && { ...r, mailing: r.mailing ? JSON.parse(r.mailing) : null }; }
+
+  createResidentSession(tokenHash, residentId, days = 180) {
+    this.run('INSERT INTO resident_sessions (token_hash, resident_id, created_at, expires_at) VALUES (?, ?, ?, ?)', tokenHash, residentId, now(), new Date(Date.now() + days * 864e5).toISOString());
+  }
+
+  residentBySession(tokenHash) {
+    const r = this.one('SELECT r.* FROM resident_sessions s JOIN residents r ON r.id = s.resident_id WHERE s.token_hash = ? AND s.expires_at > ?', tokenHash, now());
+    if (r && Date.parse(r.seen_at) < Date.now() - 36e5) this.run('UPDATE residents SET seen_at = ? WHERE id = ?', now(), r.id);
+    return this.parseResident(r);
+  }
+
+  endResidentSession(tokenHash) { this.run('DELETE FROM resident_sessions WHERE token_hash = ?', tokenHash); }
+
+  updateResident(id, { name, email, mailing }) {
+    this.run('UPDATE residents SET name = ?, email = ?, mailing = ? WHERE id = ?', name ?? null, email ?? null, mailing ? JSON.stringify(mailing) : null, id);
+    return this.parseResident(this.one('SELECT * FROM residents WHERE id = ?', id));
+  }
+
+  // Attaches an application to a resident's account. An application already on someone else's account stays there.
+  claimPermit(id, residentId) {
+    this.run('UPDATE permits SET resident_id = ? WHERE id = ? AND resident_id IS NULL', residentId, id);
+  }
+
+  residentPermits(residentId) {
+    return this.all(`SELECT id, ref, kind, status, address, progress, permit_number, created_at, updated_at, submitted_at FROM permits
+      WHERE resident_id = ? AND status != 'withdrawn' ORDER BY updated_at DESC LIMIT 50`, residentId);
   }
 
   permitForStaff(id) {

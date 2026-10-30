@@ -70,11 +70,26 @@ Scripts can send the same code as a bearer token.
 New staff get a one-time setup link (valid 7 days) from an administrator to choose their password. Removing
 someone's access takes effect on their next request.
 
-## Permit applications
+## Applications (permits, certificates, Planning Commission requests)
 
-Code in `src/permits/`. A resident needs no account: each application has a secret link, and its token (an HMAC of the
-application id, so City Hall can send the link again) is checked against a hash. Drafts are visible only to whoever holds
-the link; staff see an application once it is submitted.
+Code in `src/permits/`. Every city form residents fill out online is one definition in `forms/`, run by one engine
+(`engine.js`), so the chat, the on-screen form, completeness checks, fees, PDFs, the staff queue and notifications work the
+same for all of them. The chatbot never links to a PDF form: it offers the online application instead.
+
+| Form | Kind | Number | Replaces Wiggins PDF |
+|---|---|---|---|
+| Construction permit | `construction` | `{prefix}-BP-1001` | DocumentCenter/View/288 (fills the city's own fillable PDF) |
+| Sign permit | `sign` | `SG` | 298 |
+| Residential / commercial certificate of occupancy | `co_residential` / `co_commercial` | `CO` / `CC` | 289 / 287 |
+| Construction permit exemption certification | `exemption` | `EX` | 297 and 294 |
+| Utility connection inspection | `utility_inspection` | `UI` | 296 (approval: 292) |
+| Variance, conditional use, zoning amendment | `variance`, `conditional_use`, `rezoning` | `VA`, `CU`, `RZ` | 290, 286, 291 |
+| Utility site plan review | `utility_site_plan` | `US` | 299 |
+
+A resident needs no account: each application has a secret link, and its token (an HMAC of the application id, so City
+Hall can send the link again) is checked against a hash. Drafts are visible only to whoever holds the link; staff see an
+application once it is submitted. Residents who sign in with their phone number (below) also find every application
+under My applications.
 
 ```
 draft → submitted → (needs_info ⇄ submitted) → fees_due → in_review → issued → closed
@@ -83,15 +98,26 @@ draft → submitted → (needs_info ⇄ submitted) → fees_due → in_review �
 
 | File | What it does |
 |---|---|
-| `construction.js` | The application: fields, show-if rules, the guided questions, completeness checks, derived values, fee tiers |
-| `converse.js` | Reads chat answers: rules for simple answers, the AI for free-form ones, filling only what the resident said |
-| `screen.js` | Census geocoder (inside city limits?) and FEMA flood zone for the job address |
-| `pdf.js` | Fills the city's own fillable PDF (field map per template) and draws the permit to post at the site |
+| `engine.js` | `defineForm()`: turns a definition into coercion, show-if rules, checks, progress, the next question, the fee and the public schema. Shared field groups (owner, applicant, hearing representative, signature, notary) |
+| `forms/*.js` | One per form: fields, the guided questions, extra checks, derived values, fee, what gets issued. `forms/index.js` lists them and picks the right one from a chat message |
+| `converse.js` | Reads chat answers by field type, uses the AI for free-form ones (filling only what the resident said), and answers questions mid-application from the field's explanation and the city's documents |
+| `screen.js` | Census geocoder (inside city limits?) and FEMA flood zone for the property address |
+| `pdf.js` | Fills the city's own fillable construction PDF, prints any application (with a notary signature page where the city requires one), and draws what City Hall issues |
 | `routes.js` | Resident and staff API, the AI completeness review, notifications, daily reminders |
 
-After submission the AI review runs in the background. If a city turns on `autoReturn`, an application with problems
-the applicant didn't explain is sent back automatically, once; after that staff decide. Fees, the form template and
-payment instructions are in the city's `settings.permits.construction`.
+To add a form, add a file to `forms/` and list it in `forms/index.js`. After submission the AI review runs in the
+background. If a city turns on `autoReturn` for a form, an application with problems the applicant didn't explain is sent
+back automatically, once; after that staff decide. Fees, templates and payment instructions are in the city's
+`settings.permits.{kind}` (see `cities/wiggins.json`).
+
+## Resident accounts
+
+`src/residents.js`. Residents sign in with a phone number and a 6-digit texted code (10 minutes, 5 tries, 5 codes an hour
+per number); no passwords. City store migration #3 adds `residents`, `resident_codes` and `resident_sessions` (codes and
+session tokens stored as SHA-256 hashes) and `permits.resident_id`. A signed-in resident's applications follow them to
+any device, and their name, email and mailing address fill in new applications. Sign-in codes are never written to the
+outbox. Without Twilio the sign-in is unavailable and applications still work by secret link; locally,
+`DEV_SHOW_CODES=1` shows the code on screen instead.
 
 ## Audit log
 

@@ -79,7 +79,9 @@ export async function notify(env, store, city, { entityType, entityId, to, msg }
         status = 'sent';
       } catch (e) { status = 'failed'; error = e.message.slice(0, 300); }
     }
-    await store.recordOutbox({ entity_type: entityType, entity_id: entityId, channel: ch, to_addr: addr || to.email || to.phone || null, subject: msg.subject, body: ch === 'email' ? `${msg.body}${msg.link ? `\n\n${msg.link}` : ''}` : text, status, provider_id: providerId, error });
+    // msg.secret (sign-in codes) is sent but never written to the outbox, where staff could read it.
+    const logged = msg.secret ? `${msg.subject} (hidden)` : ch === 'email' ? `${msg.body}${msg.link ? `\n\n${msg.link}` : ''}` : text;
+    await store.recordOutbox({ entity_type: entityType, entity_id: entityId, channel: ch, to_addr: addr || to.email || to.phone || null, subject: msg.subject, body: logged, status, provider_id: providerId, error });
     results.push({ channel: ch, status, error });
   }
   return results;

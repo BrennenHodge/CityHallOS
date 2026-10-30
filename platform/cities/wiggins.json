@@ -91,6 +91,75 @@
           ],
           "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount."
         }
+      },
+      "sign": {
+        "fees": {
+          "base": 50,
+          "includedSqFt": 50,
+          "perSqFt": 1,
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount."
+        }
+      },
+      "co_residential": {
+        "fees": {
+          "flat": 25,
+          "label": "Residential certificate of occupancy",
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount.",
+          "notes": [
+            "A temporary certificate of occupancy (30 days) is $300."
+          ]
+        }
+      },
+      "co_commercial": {
+        "fees": {
+          "flat": 100,
+          "multiTenantSmall": 50,
+          "smallMaxSqFt": 2000,
+          "label": "Commercial certificate of occupancy",
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount.",
+          "notes": [
+            "A temporary certificate of occupancy (30 days) is $300."
+          ]
+        }
+      },
+      "exemption": {},
+      "utility_inspection": {
+        "fees": {
+          "flat": 65,
+          "label": "Utility connection inspection",
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount.",
+          "notes": [
+            "After-hours inspections, when available, are $150 extra."
+          ]
+        }
+      },
+      "variance": {
+        "fees": {
+          "flat": 200,
+          "label": "Variance application fee",
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount."
+        }
+      },
+      "conditional_use": {
+        "fees": {
+          "flat": 200,
+          "label": "Conditional use permit application fee",
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount."
+        }
+      },
+      "rezoning": {
+        "fees": {
+          "flat": 200,
+          "label": "Zoning amendment application fee",
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount."
+        }
+      },
+      "utility_site_plan": {
+        "fees": {
+          "flat": 250,
+          "label": "Site plan review",
+          "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount."
+        }
       }
     }
   }

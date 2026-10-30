@@ -6,3 +6,6 @@ DEV_ADMIN_EMAIL=admin@cityhallos.test
 DEV_ADMIN_PASSWORD=local-dev-password
 # Optional: answer with Claude instead of Workers AI.
 # ANTHROPIC_API_KEY=
+
+# Local only: phone sign-in codes are shown on screen instead of texted.
+DEV_SHOW_CODES=1

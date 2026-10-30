@@ -60,14 +60,14 @@ export function screenSummary(sc, city) {
   const parts = [];
   if (sc.jurisdiction.checked) {
     parts.push(sc.jurisdiction.inCity
-      ? `I found **${sc.matchedAddress}**, inside ${name} city limits, so the City of ${name} handles this permit. If that's not the right property, just type the address again.`
-      : `I found **${sc.matchedAddress}**, but federal Census maps place it ${sc.jurisdiction.place ? `in ${sc.jurisdiction.place}` : `outside ${name} city limits`}${sc.jurisdiction.county ? ` (${sc.jurisdiction.county})` : ''}. If it's outside city limits, the county issues the permit. I'll flag it so City Hall can confirm.`);
+      ? `I found **${sc.matchedAddress}**, inside ${name} city limits, so the City of ${name} handles this application. If that's not the right property, just type the address again.`
+      : `I found **${sc.matchedAddress}**, but federal Census maps place it ${sc.jurisdiction.place ? `in ${sc.jurisdiction.place}` : `outside ${name} city limits`}${sc.jurisdiction.county ? ` (${sc.jurisdiction.county})` : ''}. If it's outside city limits, the county handles it instead. I'll flag it so City Hall can confirm.`);
   } else {
     parts.push(`I couldn't match that address on federal maps, so City Hall will confirm the location.`);
   }
   if (sc.flood.checked && sc.flood.zone) {
     parts.push(sc.flood.sfha
-      ? `FEMA maps show it in flood zone **${sc.flood.zone}**, a special flood hazard area, so a floodplain development permit will likely be needed too.`
+      ? `FEMA maps show it in flood zone **${sc.flood.zone}**, a special flood hazard area. Building work there usually needs a floodplain development permit too.`
       : `FEMA maps show flood zone **${sc.flood.zone}**${sc.flood.subtype ? ` (${sc.flood.subtype.toLowerCase()})` : ''}.`);
   }
   return parts.join(' ');

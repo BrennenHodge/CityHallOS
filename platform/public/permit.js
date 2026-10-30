@@ -1,22 +1,22 @@
 /*!
- * City Hall OS: guided permit application.
+ * City Hall OS: guided applications (construction permit, variance, sign permit, certificate of occupancy, ...).
  * Loaded by embed.js when a resident starts or resumes an application. The chat panel grows into a full-screen
  * workspace: the conversation on the left, the application on the right, filling in as the resident answers.
- * Every answer is saved as it is given, so the application can be finished later from the same secret link.
+ * On a phone the two are tabs. Residents can ask what anything means at any point; the assistant answers and
+ * then repeats the question. Every answer is saved as it is given, so the application can be finished later from
+ * the same secret link, or from My applications after signing in with a phone number.
+ * Everything form-specific (fields, statuses, steps, what gets issued) comes from the form's schema.
  */
 (() => {
   if (window.__chosPermit) return;
 
-  const STATUS = {
-    draft: ['Draft', 'Not submitted yet'], submitted: ['Submitted', 'Planning & Building is checking that it is complete'],
-    needs_info: ['Changes requested', 'Update the items below and resubmit'], fees_due: ['Complete · fee due', 'Review starts once the fee is paid'],
-    in_review: ['Under review', 'The Land Code Administrator is reviewing zoning, floodplain and code requirements'],
-    issued: ['Permit issued', 'Print it and post it at the job site'], closed: ['Closed', 'Final inspection passed'],
-    denied: ['Not approved', 'Contact City Hall about your options'], withdrawn: ['Withdrawn', 'This application was withdrawn'],
-  };
-  const STEPS = [['submitted', 'Submitted'], ['complete', 'Complete'], ['paid', 'Fee paid'], ['in_review', 'Review'], ['issued', 'Issued']];
-  const STEP_AT = { draft: -1, submitted: 0, needs_info: 0, fees_due: 1, in_review: 3, issued: 4, closed: 4, denied: 3, withdrawn: -1 };
-  const INSPECTIONS = ['Footing / foundation', 'Slab', 'Framing', 'Electrical rough-in', 'Plumbing rough-in', 'Mechanical', 'Final'];
+  // Where each status sits on the progress tracker, by the tracker's step keys.
+  function stepAt(steps, status) {
+    const at = (k) => steps.findIndex(([key]) => key === k);
+    const first = (...ks) => ks.map(at).find((i) => i >= 0) ?? -1;
+    return ({ draft: -1, withdrawn: -1, submitted: first('submitted'), needs_info: first('submitted'), fees_due: first('complete', 'submitted'),
+      in_review: first('in_review'), denied: first('in_review'), issued: steps.length - 1, closed: steps.length - 1 })[status] ?? -1;
+  }
 
   const CSS = `
   .panel { transition: right .5s cubic-bezier(.2,.8,.2,1), bottom .5s cubic-bezier(.2,.8,.2,1), width .5s cubic-bezier(.2,.8,.2,1), height .5s cubic-bezier(.2,.8,.2,1), border-radius .5s; }
@@ -33,6 +33,10 @@
   .hbar i { display: block; height: 100%; background: #4ade80; transition: width .6s ease; }
   .head .tbtn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 11px; border-radius: 10px; border: 1px solid rgba(255,255,255,.28); background: transparent; color: #fff; cursor: pointer; font-weight: 600; font-size: 13px; }
   .head .tbtn:hover { background: rgba(255,255,255,.12); }
+  .head h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qhelp { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; border-radius: 50%; border: 1px solid var(--line); background: #fff; color: var(--brand); font-size: 11px; font-weight: 800; cursor: pointer; vertical-align: 1px; padding: 0; }
+  .qhelp:hover { border-color: var(--brand); }
+  .askhint { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .opt { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 7px 12px; font-size: 13.5px; cursor: pointer; text-align: left; line-height: 1.3; font-weight: 550; }
   .opt:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
@@ -97,7 +101,7 @@
   .issues-box { display: grid; gap: 8px; padding: 12px 14px; border-radius: 12px; background: var(--paper); border: 1px solid var(--line); }
   .issues-box h3 { margin: 0; font-size: 13.5px; }
   .issues-box button.go { border: 0; background: none; color: var(--brand); font-weight: 600; cursor: pointer; padding: 0; font-size: 12.5px; }
-  .track { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+  .track { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; }
   .track div { display: grid; gap: 5px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
   .track i { height: 6px; border-radius: 99px; background: var(--soft); }
   .track .on i { background: var(--brand); } .track .on { color: var(--ink); }
@@ -111,16 +115,26 @@
   .spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: sp .8s linear infinite; display: inline-block; }
   @keyframes sp { to { transform: rotate(360deg); } }
   @media (max-width: 900px) {
-    .root.permit:not(.page) .panel { right: 0; bottom: 0; width: 100vw; height: 100vh; border-radius: 0; }
+    .root.permit:not(.page) .panel { right: 0; bottom: 0; width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; }
+    .root.permit.page .panel { height: 100dvh; }
     .ws { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
     .ws-tabs { display: flex; gap: 4px; padding: 8px 10px; background: #fff; border-bottom: 1px solid var(--line); }
-    .ws-tabs button { flex: 1; height: 36px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); font-weight: 650; cursor: pointer; font-size: 13.5px; }
+    .ws-tabs button { flex: 1; height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); font-weight: 650; cursor: pointer; font-size: 14px; }
     .ws-tabs button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
     .ws[data-tab="chat"] .ws-sheet, .ws[data-tab="form"] .ws-chat { display: none; }
     .ws-chat { border-right: 0; }
-    .sheet { padding: 14px 12px 50px; }
+    .sheet { padding: 14px 12px 50px; gap: 12px; }
+    .sec { padding: 14px; border-radius: 14px; }
     .fld.half, .fld.third { grid-column: span 3; }
     .head .tbtn .lbl { display: none; }
+    .head .tbtn { padding: 0 9px; }
+    .head h2 { font-size: 15px; }
+    /* Thumb-sized choices, and 16px text so phones don't zoom into fields. */
+    .opt { padding: 10px 14px; font-size: 15px; }
+    .seg button { padding: 9px 12px; font-size: 14.5px; }
+    .fld input[type=text], .fld input[type=email], .fld input[type=tel], .fld input[type=number], .fld textarea, .fld select { font-size: 16px; padding: 10px 12px; }
+    .composer textarea { font-size: 16px; }
+    .steps { margin: 0 -12px; padding-left: 12px; padding-right: 12px; }
   }`;
 
   async function mount(o) {
@@ -134,13 +148,14 @@
       get(k) { try { return JSON.parse(localStorage.getItem(LS + k)); } catch { return null; } },
       set(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
     };
-    const S = { showErrors: false, id: o.permit?.id || null, token: o.permit?.token || null, app: null, schema: null, msgs: [], busy: false, tab: 'chat', pending: {}, saveTimer: 0, savedAt: null, saving: false, reviewing: false, closed: false, poll: 0 };
+    const S = { showErrors: false, id: o.permit?.id || null, token: o.permit?.token || null, kind: o.kind || 'construction', app: null, schema: null, msgs: [], busy: false, tab: 'chat', pending: {}, saveTimer: 0, savedAt: null, saving: false, reviewing: false, closed: false, poll: 0, signIn: null };
     const $ = (s) => root.querySelector(s);
     const link = () => `${o.origin}/${city}/#permit=${S.id}.${S.token}`;
+    let STATUS = {};
 
     async function call(path, { method = 'GET', body, form } = {}) {
       const res = await fetch(`${api}/permits${path}`, {
-        method, headers: { 'X-Permit-Token': S.token || '', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        method, headers: { 'X-Permit-Token': S.token || '', ...(o.account?.token() ? { 'X-Resident-Token': o.account.token() } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
         body: form || (body ? JSON.stringify(body) : undefined),
       });
       const data = await res.json().catch(() => ({}));
@@ -153,7 +168,15 @@
     const me = (text) => { S.msgs.push({ role: 'user', text }); saveMsgs(); drawChat(); };
     function askMsg(a) {
       if (!a) return;
-      say(a.prompt, { ask: a.id, choices: a.choices, upload: a.upload });
+      say(a.prompt, { ask: a.id, choices: a.choices, upload: a.upload, hint: S.msgs.filter((m) => m.ask).length < 2 });
+      keyboard(a);
+    }
+
+    // The phone keyboard that fits the answer: number pad for amounts, phone pad for phone numbers.
+    function keyboard(a) {
+      const input = $('#pInput'); if (!input) return;
+      if (a?.input) input.setAttribute('inputmode', a.input); else input.removeAttribute('inputmode');
+      input.placeholder = a?.choices && !a.input ? 'Tap an answer, or ask a question…' : 'Answer, or ask a question…';
     }
 
     /* ---------------- Layout ---------------- */
@@ -164,11 +187,11 @@
       const panel = root.querySelector('.panel');
       panel.innerHTML = `
         <header class="head">
-          <div class="avatar">${icon('file', 20)}</div>
-          <div style="min-width:0"><h2>Construction permit application</h2><p class="sub2" id="pSub"></p></div>
+          <div class="avatar">${icon(S.schema?.icon || 'file', 20)}</div>
+          <div style="min-width:0;flex:1"><h2 id="pTitle">${esc(S.schema?.title || 'Application')}</h2><p class="sub2" id="pSub"></p></div>
           <div class="tools" style="gap:6px">
-            <button class="tbtn" id="pLater" title="Get a link to finish later">${icon('send', 15)}<span class="lbl">Finish later</span></button>
-            <button class="tbtn" id="pPdf" title="See the application as the city's PDF form">${icon('file', 15)}<span class="lbl">PDF</span></button>
+            <button class="tbtn" id="pLater" title="Save it and finish later">${icon('send', 15)}<span class="lbl">Finish later</span></button>
+            <button class="tbtn" id="pPdf" title="Download a printable copy">${icon('file', 15)}<span class="lbl">Print</span></button>
             <button class="icon-btn" id="pMin" aria-label="Back to the chat" title="Back to the chat">${icon('x')}</button>
           </div>
         </header>
@@ -178,7 +201,7 @@
           <section class="ws-chat">
             <div class="log" id="pLog" aria-live="polite"></div>
             <form class="composer" id="pForm">
-              <textarea id="pInput" rows="1" placeholder="Type your answer…" aria-label="Your answer"></textarea>
+              <textarea id="pInput" rows="1" placeholder="Answer, or ask a question…" aria-label="Your answer or question" enterkeyhint="send"></textarea>
               <button class="send" type="submit" aria-label="Send">${icon('send')}</button>
             </form>
             <div class="foot"><span>Answers save automatically</span><span>Emergency? Call <a href="tel:911">911</a></span></div>
@@ -200,6 +223,11 @@
       sheet.addEventListener('click', onSheetClick);
       sheet.addEventListener('focusout', (e) => { if (e.target.dataset?.key) flush(); });
       setTab(S.tab);
+    }
+
+    function drawTitle() {
+      const t = $('#pTitle'); if (t) t.textContent = innerWidth <= 900 ? S.schema.short : S.schema.title;
+      const av = root.querySelector('.head .avatar'); if (av) av.innerHTML = icon(S.schema.icon || 'file', 20);
     }
 
     function setTab(t) {
@@ -230,6 +258,8 @@
           ${m.choices ? `<div class="opts">${m.choices.map(([v, l]) => `<button class="opt ${long ? 'long' : ''}" data-choice="${esc(v)}" data-ask="${esc(m.ask)}" ${live ? '' : 'disabled'}>${esc(l)}</button>`).join('')}</div>` : ''}
           ${m.upload && live ? `<div class="opts">${m.upload.map((k) => `<button class="opt" data-upload="${esc(k)}">${icon('camera', 14)} ${esc(kindLabel(k))}</button>`).join('')}</div>` : ''}
           ${m.buttons && i === last ? `<div class="opts">${m.buttons}</div>` : ''}
+          ${m.suggest && i >= last - 1 ? `<div class="opts"><button class="opt" data-switch="${esc(m.suggest.kind)}">${icon('file', 14)} Start a ${esc(m.suggest.title.toLowerCase())}</button></div>` : ''}
+          ${m.hint && live ? '<div class="askhint">Not sure what to put? Ask me, like "what does this mean?"</div>' : ''}
         </div>`;
       }).join('');
       log.scrollTop = log.scrollHeight;
@@ -240,8 +270,18 @@
       if (c && !c.disabled) { me(c.textContent.trim()); send({ choice: c.dataset.choice, ask: c.dataset.ask }, true); return; }
       const u = e.target.closest('[data-upload]');
       if (u) { pickFile(u.dataset.upload); return; }
+      const sw = e.target.closest('[data-switch]');
+      if (sw) { close(); o.openForm?.(sw.dataset.switch); return; }
       const act = e.target.closest('[data-pact]');
       if (act) sheetAction(act.dataset.pact, act);
+    }
+
+    // "What does this mean?" from the form: the assistant answers in the chat, from the field's explanation and city documents.
+    function askAbout(key) {
+      const f = S.schema.sections.flatMap((x) => x.fields).find((x) => x.key === key);
+      if (!f || S.busy) return;
+      setTab('chat');
+      send({ text: `What does "${f.label.replace(/\?$/, '')}" mean, and what should I put?`, about: key });
     }
 
     async function send(body, already) {
@@ -254,7 +294,7 @@
         const v = await call(`/${S.id}/message`, { method: 'POST', body: { ask: body.ask || S.app.ask?.id, ...body } });
         S.msgs.pop();
         setApp(v, v.changed);
-        if (v.reply) say(v.reply);
+        if (v.reply) say(v.reply, v.suggest ? { suggest: v.suggest } : {});
         askMsg(v.ask);
       } catch (err) {
         S.msgs.pop(); say(err.message);
@@ -305,14 +345,15 @@
         case 'radio': input = `<div class="radio">${f.options.map(([o, l]) => `<button type="button" class="${v === o ? 'on' : ''}" data-set="${f.key}" data-v="${esc(o)}" ${dis}><i></i><span>${esc(l)}</span></button>`).join('')}</div>`; break;
         case 'multi': input = `<div class="seg">${f.options.map(([o, l]) => `<button type="button" class="${(v || []).includes(o) ? 'on' : ''}" data-toggle="${f.key}" data-v="${esc(o)}" ${dis}>${esc(l)}</button>`).join('')}</div>`; break;
         case 'bool': input = `<div class="seg">${[[true, 'Yes'], [false, 'No']].map(([o, l]) => `<button type="button" class="${v === o ? 'on' : ''}" data-set="${f.key}" data-v="${o}" ${dis}>${l}</button>`).join('')}</div>`; break;
-        case 'check': return `<div class="fld" data-f="${f.key}"><label class="chk"><input type="checkbox" data-key="${f.key}" ${v ? 'checked' : ''} ${dis}><span>${esc(f.label)}</span></label>${issues.map(issueHtml).join('')}</div>`;
+        case 'check': return `<div class="fld" data-f="${f.key}"><label class="chk"><input type="checkbox" data-key="${f.key}" ${v ? 'checked' : ''} ${dis}><span>${esc(f.label)}</span></label>${f.explain && S.app.editable ? `<small><button type="button" class="go" style="border:0;background:none;color:var(--brand);font-weight:600;cursor:pointer;padding:0" data-help="${f.key}">What does this mean?</button></small>` : ''}${issues.map(issueHtml).join('')}</div>`;
         case 'money': input = `<div class="money"><span>$</span><input id="${id}" type="text" inputmode="decimal" data-key="${f.key}" value="${v != null ? esc(Number(v).toLocaleString()) : ''}" ${dis}></div>`; break;
         case 'number': input = `<input id="${id}" type="number" inputmode="decimal" min="0" step="any" data-key="${f.key}" value="${v ?? ''}" ${dis}>`; break;
         case 'signature': input = `<div class="sig"><input id="${id}" type="text" data-key="${f.key}" value="${esc(v ?? '')}" placeholder="Your full name" autocomplete="name" ${dis}></div>${S.app.data.signed_at ? `<small>Signed electronically ${new Date(S.app.data.signed_at).toLocaleString()}</small>` : ''}`; break;
         case 'files': return filesHtml(f);
         default: input = `<input id="${id}" type="${f.type === 'email' ? 'email' : f.type === 'phone' ? 'tel' : 'text'}" data-key="${f.key}" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}" ${f.type === 'state' ? 'maxlength="2"' : ''} autocomplete="${{ email: 'email', phone: 'tel', zip: 'postal-code' }[f.type] || 'off'}" ${dis}>`;
       }
-      const labelTag = ['select', 'radio', 'multi', 'bool'].includes(f.type) ? `<div class="lbl">${esc(f.label)}</div>` : `<label for="${id}">${esc(f.label)}</label>`;
+      const q = S.app.editable ? `<button type="button" class="qhelp" data-help="${f.key}" aria-label="What does ${esc(f.label)} mean?" title="What does this mean?">?</button>` : '';
+      const labelTag = ['select', 'radio', 'multi', 'bool'].includes(f.type) ? `<div class="lbl">${esc(f.label)}${q}</div>` : `<div class="lbl"><label for="${id}">${esc(f.label)}</label>${q}</div>`;
       return `<div class="fld ${span}" data-f="${f.key}">${labelTag}${input}${f.help ? `<small>${esc(f.help)}</small>` : ''}${issues.map(issueHtml).join('')}</div>`;
     }
 
@@ -321,7 +362,7 @@
       const issues = issuesFor(['files']);
       return `<div class="fld" data-f="files"><div class="lbl">Attachments</div>
         <div class="files">${files.map((x) => `<div class="file"><span class="k">${esc(kindLabel(x.kind))}</span><a href="#" data-open-file="${esc(x.id)}">${esc(x.name)}</a>
-          ${S.app.editable ? `<button data-del-file="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">${icon('x', 14)}</button>` : ''}</div>`).join('') || '<small>No attachments yet. Proof of ownership is required. Plans are usually needed for new buildings and additions.</small>'}</div>
+          ${S.app.editable ? `<button data-del-file="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">${icon('x', 14)}</button>` : ''}</div>`).join('') || `<small>No attachments yet.${f.help ? ` ${esc(f.help)}` : ''} A phone photo is fine.</small>`}</div>
         ${S.app.editable ? `<div class="uprow"><select id="pKind" data-nokey>${f.kinds.map(([k, l]) => `<option value="${esc(k)}">${esc(l)}</option>`).join('')}</select>
           <button class="btn" type="button" data-pact="upload">${icon('camera', 15)} Upload a PDF or photo</button></div>` : ''}
         ${issues.map(issueHtml).join('')}</div>`;
@@ -341,14 +382,15 @@
       if (sc?.jurisdiction?.checked) badges.push(sc.jurisdiction.inCity ? `<span class="badge ok">${icon('check', 12)} Inside city limits</span>` : `<span class="badge bad">${icon('alert', 12)} Outside city limits?</span>`);
       if (sc?.flood?.checked && sc.flood.zone) badges.push(`<span class="badge ${sc.flood.sfha ? 'warn' : 'ok'}">Flood zone ${esc(sc.flood.zone)}</span>`);
       const fee = a.fee_assessed != null ? { total: a.fee_assessed, assessed: true } : a.fee;
+      const addr = S.schema.addressField;
       return `<div class="summary">
         <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
-          <div style="flex:1;min-width:220px"><div style="font-size:12px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.05em">Job site</div>
-            <div style="font-weight:650;font-size:15px">${esc(sc?.matchedAddress || a.data.job_address || 'Address not given yet')}</div>
+          ${addr ? `<div style="flex:1;min-width:200px"><div style="font-size:12px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.05em">Property</div>
+            <div style="font-weight:650;font-size:15px">${esc(sc?.matchedAddress || a.data[addr] || 'Address not given yet')}</div>
             ${badges.length ? `<div class="badges" style="margin-top:6px">${badges.join('')}</div>` : ''}
-            ${sc?.jurisdiction?.checked || sc?.flood?.checked ? '<small style="display:block;margin-top:6px;color:var(--muted)">Screened automatically with U.S. Census and FEMA maps. City Hall makes the official determinations.</small>' : ''}</div>
-          <div class="fee" style="min-width:190px"><div style="font-size:12px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.05em">${fee?.assessed ? 'Permit fee' : 'Estimated permit fee'}</div>
-            ${fee ? `<div class="tot">$${Number(fee.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>${fee.assessed ? (a.fee_paid != null ? '<small>Paid</small>' : '<small>Due</small>') : `<small>${esc(a.fee.lines?.[1]?.label?.startsWith('Doubled') ? 'Doubled: work already started. ' : '')}From the published fee schedule. City Hall confirms the final amount.</small>`}` : '<small>Shown once you enter the valuation.</small>'}</div>
+            ${sc?.jurisdiction?.checked || sc?.flood?.checked ? '<small style="display:block;margin-top:6px;color:var(--muted)">Screened automatically with U.S. Census and FEMA maps. City Hall makes the official determinations.</small>' : ''}</div>` : ''}
+          <div class="fee" style="min-width:170px"><div style="font-size:12px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.05em">${fee?.assessed ? 'Fee' : 'Estimated fee'}</div>
+            ${fee && !fee.total && !fee.assessed ? '<div class="tot">No fee</div>' : fee ? `<div class="tot">$${Number(fee.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>${fee.assessed ? (a.fee_paid != null ? '<small>Paid</small>' : '<small>Due</small>') : `<small>${esc(a.fee.lines?.[1]?.label?.startsWith('Doubled') ? 'Doubled: work already started. ' : '')}From the published fee schedule. City Hall confirms the final amount.</small>`}` : '<small>Shown once the application has what the fee is based on.</small>'}</div>
         </div>
         ${!fee?.assessed && a.fee?.notes?.length ? `<details><summary style="cursor:pointer;font-size:12.5px;color:var(--muted)">Other fees that may apply</summary><ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--muted)">${a.fee.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></details>` : ''}
       </div>`;
@@ -358,19 +400,21 @@
       const a = S.app;
       if (a.status === 'draft') return '';
       const [label, sub] = STATUS[a.status] || [a.status, ''];
-      const at = STEP_AT[a.status];
+      const steps = S.schema.steps;
+      const at = stepAt(steps, a.status);
+      const iss = S.schema.issue;
       const corr = a.status === 'needs_info' && a.corrections;
       return `<div class="status-card">
         <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
           <div><div style="font-size:12px;color:var(--muted);font-weight:650">APPLICATION</div><div class="refno">${esc(a.ref || '')}</div></div>
           <div style="text-align:right"><b>${esc(label)}</b><div style="font-size:12.5px;color:var(--muted)">${esc(sub)}</div></div>
         </div>
-        ${!['denied', 'withdrawn'].includes(a.status) ? `<div class="track">${STEPS.map(([, l], i) => `<div class="${i <= at ? 'on' : ''}"><i></i>${l}</div>`).join('')}</div>` : ''}
+        ${!['denied', 'withdrawn'].includes(a.status) ? `<div class="track">${steps.map(([, l], i) => `<div class="${i <= at ? 'on' : ''}"><i></i>${esc(l)}</div>`).join('')}</div>` : ''}
         ${corr ? `<div class="corr"><b>City Hall asked for these changes${corr.by ? ` (${esc(corr.by)})` : ''}:</b><ul>${(corr.items || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>${corr.message ? `<div>${esc(corr.message)}</div>` : ''}<div>Update the application below, then tap <b>Resubmit</b>.</div></div>` : ''}
         ${a.status === 'fees_due' && a.payment ? `<div class="corr" style="background:#eef6f1;border-color:#cde6d8"><b>How to pay</b><div>${esc(a.payment)}</div></div>` : ''}
-        ${['issued', 'closed'].includes(a.status) ? `<div class="row2" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-pact="permit-pdf">${icon('file', 15)} Download permit ${esc(a.permit_number || '')}</button></div>` : ''}
-        ${a.status === 'issued' ? `<div class="issues-box"><h3>Request an inspection</h3>
-          <div class="uprow"><select id="pInsType">${INSPECTIONS.map((x) => `<option>${esc(x)}</option>`).join('')}</select><input type="text" id="pInsDate" placeholder="Preferred day" style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;width:150px">
+        ${['issued', 'closed'].includes(a.status) ? `<div class="row2" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-pact="permit-pdf">${icon('file', 15)} Download ${esc(iss.noun)} ${esc(a.permit_number || '')}</button></div>` : ''}
+        ${iss.inspections && (a.status === 'issued' || (a.status === 'in_review' && iss.noun === 'certificate')) ? `<div class="issues-box"><h3>Request an inspection</h3>
+          <div class="uprow"><select id="pInsType">${iss.inspections.map((x) => `<option>${esc(x)}</option>`).join('')}</select><input type="text" id="pInsDate" placeholder="Preferred day" style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;width:150px">
           <button class="btn" data-pact="inspect">${icon('send', 14)} Request</button></div></div>` : ''}
         ${(a.events || []).length ? `<details><summary style="cursor:pointer;font-size:12.5px;color:var(--muted)">History</summary><div class="tl2" style="margin-top:8px">${a.events.slice().reverse().map((e) => `<div><i></i><span><b>${esc(e.note || (STATUS[e.status] || [e.status])[0])}</b><br><small style="color:var(--muted)">${new Date(e.at).toLocaleString()}</small></span></div>`).join('')}</div></details>` : ''}
       </div>`;
@@ -393,7 +437,7 @@
           <button class="btn" data-pact="check" ${S.reviewing ? 'disabled' : ''}>${S.reviewing ? '<span class="spin"></span> Checking…' : `${icon('search', 15)} Check my application`}</button>
           <button class="btn primary" data-pact="submit" ${errs.length || S.reviewing ? 'disabled' : ''}>${icon('send', 15)} ${a.status === 'needs_info' ? 'Resubmit application' : 'Submit application'}</button>
         </div>
-        <small style="color:var(--muted)">The AI check reads your answers and attachments the way a permit technician would. It never approves anything; Planning &amp; Building staff review every application.</small>
+        <small style="color:var(--muted)">The AI check reads your answers and attachments the way City Hall staff would. It never approves anything; ${esc(S.schema.department)} staff review every application.</small>
       </div>`;
     }
 
@@ -404,7 +448,7 @@
       try { sel = key ? [active.selectionStart, active.selectionEnd] : null; } catch { sel = null; }
       const secs = S.schema.sections;
       el.innerHTML = `
-        <div><h1>${esc(val('project_name') || 'Construction permit application')}</h1><p class="lede">${esc(o.cityName)} · Planning &amp; Building${S.app.editable ? ' · Answer in the chat, or fill in anything here directly.' : ''}</p></div>
+        <div><h1>${esc(val('project_name') || S.schema.title)}</h1><p class="lede">${esc(o.cityName)} · ${esc(S.schema.department)}${S.app.editable ? ' · Answer in the chat, or fill in anything here directly. Tap ? to ask what something means.' : ''}</p></div>
         ${statusHtml()}
         ${summaryHtml()}
         ${S.app.editable ? `<nav class="steps">${secs.map((s, i) => { const st = sectionDone(s); return `<button class="step ${st.done ? 'done' : ''} ${st.err ? 'err' : ''}" data-jump="${s.id}"><b>${st.done ? '✓' : i + 1}</b>${esc(s.title)}</button>`; }).join('')}</nav>` : ''}
@@ -482,6 +526,8 @@
         cur.has(tog.dataset.v) ? cur.delete(tog.dataset.v) : cur.add(tog.dataset.v);
         edit(k, [...cur]); drawSheet(); return;
       }
+      const help = e.target.closest('[data-help]');
+      if (help) { e.preventDefault(); askAbout(help.dataset.help); return; }
       const jump = e.target.closest('[data-jump]');
       if (jump) { $(`#sec-${jump.dataset.jump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
       const go = e.target.closest('[data-go]');
@@ -505,7 +551,9 @@
           setApp(v); say(`Inspection request sent: **${$('#pInsType')?.value || 'Inspection'}**. City Hall will call to confirm the time.`);
         } catch (err) { say(err.message); }
       } else if (a === 'send-link') sendLink();
-      else if (a === 'copy-link') { navigator.clipboard?.writeText(link()); say('Link copied. Keep it private: anyone with it can open your application.'); }
+      else if (a === 'sign-in') startSignIn();
+      else if (a === 'resend' && S.signIn?.phone) { const ph = S.signIn.phone; S.signIn = { step: 'phone' }; signInStep(ph); }
+      else if (a === 'copy-link') { navigator.clipboard?.writeText(link()); say('Link copied. Keep it private: anyone with it can open your application.'); if (S.app.ask) askMsg(S.app.ask); }
     }
 
     /* ---------------- Files ---------------- */
@@ -552,7 +600,7 @@
       await flush();
       S.showErrors = true;
       S.reviewing = true; drawSheet();
-      say('Checking your application the way a permit technician would: required answers, the numbers, and whether your documents match what you entered…');
+      say('Checking your application the way City Hall staff would: required answers, the numbers, and whether your documents match what you entered…');
       try {
         const v = await call(`/${S.id}/check`, { method: 'POST' });
         setApp(v, Object.keys(v.filled || {}));
@@ -582,7 +630,8 @@
         const v = await call(`/${S.id}/submit`, { method: 'POST' });
         setApp(v);
         remember();
-        say(`**Submitted.** Your reference number is **${v.ref}**.\n\nWhat happens next:\n- Planning & Building checks that it's complete.\n- You'll get the permit fee and how to pay.\n- The Land Code Administrator reviews zoning, floodplain and code requirements.\n- When it's approved, you download the permit here and post it at the job site.\n\nWe'll contact you by ${({ email: 'email', sms: 'text message', call: 'phone' })[v.data.contact_pref] || 'email'} at each step. You can also type **${v.ref}** in the chat any time to check the status.`);
+        const next = S.schema.nextSteps || [];
+        say(`**Submitted.** Your reference number is **${v.ref}**.${next.length ? `\n\nWhat happens next:\n${next.map((x) => `- ${x}`).join('\n')}` : ''}${S.schema.notary ? '\n\n**Next for you:** tap **Print**, sign the signature page in front of a notary, then bring it to City Hall or upload a photo of it here.' : ''}\n\nWe'll contact you by ${({ email: 'email', sms: 'text message', call: 'phone' })[v.data.contact_pref] || 'email'} at each step. You can also type **${v.ref}** in the chat any time to check the status.`);
         watch();
       } catch (err) {
         if (err.data?.checks) { setApp({ ...S.app, checks: err.data.checks }); say(`${err.message} They're marked in red on the right.`); } else say(err.message);
@@ -609,13 +658,53 @@
 
     async function finishLater() {
       await flush();
-      const c = S.app.data;
-      const hasContact = c.owner_email || c.applicant_email || c.contractor_email || c.owner_phone || c.owner_cell;
-      say(`Your answers are saved. ${hasContact ? 'I can send you a link to pick up where you left off.' : "Want a link to finish later? Type your email or cell number and I'll send it."} You can also copy it now.`, {
-        buttons: `${hasContact ? `<button class="opt" data-pact="send-link">${icon('send', 14)} Send me the link</button>` : ''}<button class="opt" data-pact="copy-link">${icon('copy', 14)} Copy link</button>`,
-      });
-      S.wantLink = !hasContact;
       if (innerWidth <= 900) setTab('chat');
+      if (o.account?.signedIn()) {
+        say(`Your answers are saved to your account (**${esc(o.account.profile().phone)}**). Open **My applications** in the chat on any phone or computer to pick up where you left off.`, {
+          buttons: `<button class="opt" data-pact="copy-link">${icon('copy', 14)} Copy link</button>`,
+        });
+        return;
+      }
+      say('Your answers are saved on this device. To finish on any phone or computer, save it to your phone number: I\'ll text you a code, no password needed.', {
+        buttons: `${o.account ? `<button class="opt" data-pact="sign-in">${icon('phone', 14)} Save with my phone number</button>` : ''}<button class="opt" data-pact="copy-link">${icon('copy', 14)} Copy link</button>`,
+      });
+    }
+
+    // Sign in from inside the application: phone number, then the texted code, both typed in the chat.
+    function startSignIn() {
+      S.signIn = { step: 'phone' };
+      say("What's your cell phone number?");
+      keyboard({ input: 'tel' });
+      $('#pInput').placeholder = 'Your cell number';
+      $('#pInput')?.focus();
+    }
+
+    async function signInStep(v) {
+      const st = S.signIn;
+      if (/^(cancel|stop|never ?mind|no)$/i.test(v)) { S.signIn = null; say('No problem. Your answers are still saved on this device.'); keyboard(S.app.ask); return; }
+      S.busy = true; S.msgs.push({ role: 'bot', pending: true }); drawChat();
+      try {
+        if (st.step === 'phone') {
+          const r = await o.account.sendCode(v);
+          S.signIn = { step: 'code', phone: v };
+          S.msgs.pop();
+          say(`I texted a 6-digit code to **${esc(r.phone)}**. Type it here.${r.devCode ? ` (Test mode, no texts are sent: your code is **${r.devCode}**.)` : ''}`, { buttons: `<button class="opt" data-pact="resend">Send a new code</button>` });
+          keyboard({ input: 'numeric' }); $('#pInput').placeholder = '6-digit code';
+        } else {
+          const profile = await o.account.verify(st.phone, v);
+          S.signIn = null;
+          S.msgs.pop();
+          const fresh = await call(`/${S.id}`);
+          setApp(fresh);
+          say(`You're signed in as **${esc(profile.phone)}**. This application is saved to your account. Find it any time under **My applications** in the chat.`);
+          keyboard(S.app.ask);
+          if (S.app.ask) askMsg(S.app.ask);
+        }
+      } catch (err) {
+        S.msgs.pop();
+        if (err.status === 503) { S.signIn = null; S.wantLink = true; say(`${err.message} Type your email and I'll send you a link instead, or copy it now.`, { buttons: `<button class="opt" data-pact="copy-link">${icon('copy', 14)} Copy link</button>` }); } else say(err.message);
+      }
+      S.busy = false; drawChat();
     }
 
     async function sendLink(target = {}) {
@@ -642,7 +731,7 @@
     // The device keeps a list of its applications, so the chat can offer to continue one.
     function remember() {
       const list = (local.get('list') || []).filter((x) => x.id !== S.id);
-      list.unshift({ id: S.id, token: S.token, ref: S.app?.ref || null, status: S.app?.status || 'draft', progress: S.app?.progress || 0, address: S.app?.screen?.matchedAddress || S.app?.data?.job_address || null, at: Date.now() });
+      list.unshift({ id: S.id, token: S.token, kind: S.kind, title: S.schema?.short || null, ref: S.app?.ref || null, status: S.app?.status || 'draft', progress: S.app?.progress || 0, address: S.app?.screen?.matchedAddress || (S.schema?.addressField && S.app?.data?.[S.schema.addressField]) || null, at: Date.now() });
       local.set('list', list.slice(0, 10));
       o.onChange?.(list[0]);
     }
@@ -658,36 +747,44 @@
 
     frame();
     try {
-      S.schema = await fetch(`${api}/permits/schema`, { cache: 'no-cache' }).then((r) => r.json());
+      const loadSchema = async (kind) => {
+        S.schema = await fetch(`${api}/permits/schema/${encodeURIComponent(kind)}`, { cache: 'no-cache' }).then((r) => r.json());
+        STATUS = S.schema.statuses || {};
+        S.kind = kind;
+        drawTitle();
+      };
       if (!S.id) {
+        await loadSchema(S.kind);
         const prev = (local.get('list') || []).find((x) => x.status !== 'draft' && x.status !== 'withdrawn');
-        const v = await call('', { method: 'POST', body: { opening: o.opening || '', convoId: o.convoId || null, copyFrom: prev ? { id: prev.id, token: prev.token } : null } });
+        const v = await call('', { method: 'POST', body: { kind: S.kind, opening: o.opening || '', convoId: o.convoId || null, copyFrom: prev ? { id: prev.id, token: prev.token } : null } });
         S.id = v.id; S.token = v.token;
         S.app = v; remember();
         drawHead(); drawSheet(v.changed || Object.keys(v.data));
-        say(`I'll help you prepare your construction permit application for ${o.cityName}. I'll ask one thing at a time and fill in the city's form on the right as we go. You can also type straight into the form.${prev ? `\n\nI reused your contact${v.data.contractor_name ? ' and contractor' : ''} details from **${prev.ref || 'your last application'}**. Change anything that's different.` : ''}\n\nNothing is sent to City Hall until you tap **Submit**.`);
+        const wide = innerWidth > 900;
+        say(`I'll help you fill out the **${S.schema.title.toLowerCase()}** for the ${o.cityName.replace(/^the /i, '')}.${S.schema.intro ? ` ${S.schema.intro}` : ''}\n\nI'll ask one thing at a time and fill in the city's form ${wide ? 'on the right' : 'on the Application tab'} as we go. If anything is confusing, just ask, like "what does this mean?" or "where do I find that?"${v.reused ? `\n\nI reused your contact details from **${esc(v.reused)}**. Change anything that's different.` : ''}${o.account?.signedIn() ? `\n\nYou're signed in, so this is saved to your account as you go.` : ''}\n\nNothing is sent to City Hall until you tap **Submit**.`);
         if (v.reply) say(v.reply);
         askMsg(v.ask);
       } else {
         const v = await call(`/${S.id}`);
+        await loadSchema(v.kind || 'construction');
         S.app = v; remember();
         S.msgs = local.get(`${S.id}:msgs`) || [];
         drawHead(); drawSheet();
         if (!S.msgs.length || o.fresh) {
-          if (v.status === 'draft') { say(`Welcome back. Your application is **${v.progress}%** complete, and everything you entered is saved.`); askMsg(v.ask); }
+          if (v.status === 'draft') { say(`Welcome back to your **${S.schema.short.toLowerCase()}** application. It's **${v.progress}%** complete, and everything you entered is saved.`); askMsg(v.ask); }
           else if (v.status === 'needs_info') { say(`City Hall asked for a few changes to **${v.ref}**:\n${(v.corrections?.items || []).map((x) => `- ${x}`).join('\n')}\n\nYour answers are saved. Fix these on the right, then tap **Resubmit**.`); }
           else say(`Here's the latest on **${v.ref}**: ${STATUS[v.status]?.[0] || v.status}. ${STATUS[v.status]?.[1] || ''}.`);
         } else if (local.get(`${S.id}:seen`) && local.get(`${S.id}:seen`) !== v.status) {
           // City Hall acted since the last visit: say what changed before anything else.
           const [label, sub] = STATUS[v.status] || [v.status, ''];
-          say(v.status === 'issued' ? `Good news: permit **${v.permit_number}** has been issued. Download it on the Application tab, print it and post it at the job site.`
+          say(v.status === 'issued' ? `Good news: your ${esc(S.schema.short.toLowerCase())} was ${S.schema.issue.noun === 'approval' ? 'approved' : 'issued'} (**${v.permit_number}**). Download it on the Application tab.${S.schema.issue.post ? ' Print it and post it where it can be seen.' : ''}`
             : v.status === 'needs_info' ? `City Hall asked for a few changes to **${v.ref}**:\n${(v.corrections?.items || []).map((x) => `- ${x}`).join('\n')}\n\nFix these on the right, then tap **Resubmit**.`
-              : v.status === 'fees_due' ? `**${v.ref}** is complete. The permit fee is **$${Number(v.fee_assessed).toFixed(2)}**. ${v.payment || ''}`
+              : v.status === 'fees_due' ? `**${v.ref}** is complete. The fee is **$${Number(v.fee_assessed).toFixed(2)}**. ${v.payment || ''}`
                 : `Update on **${v.ref}**: ${label}. ${sub}.`);
         } else drawChat();
       }
     } catch (err) {
-      say(`Sorry, the permit application couldn't load (${err.message}). Please try again, or call City Hall${o.phone ? ` at ${o.phone}` : ''}.`);
+      say(`Sorry, the application couldn't load (${err.message}). Please try again, or call City Hall${o.phone ? ` at ${o.phone}` : ''}.`);
     }
 
     // Typed email or phone after "finish later" goes to the link, not the application.
@@ -696,6 +793,7 @@
     form.onsubmit = (e) => {
       e.preventDefault();
       const input = $('#pInput'); const v = input.value.trim();
+      if (S.signIn && v && !S.busy) { input.value = ''; me(S.signIn.step === 'code' ? '••••••' : v); signInStep(v); return; }
       if (S.wantLink && v && (/@/.test(v) || v.replace(/\D/g, '').length >= 10)) {
         S.wantLink = false; input.value = ''; me(v);
         sendLink(/@/.test(v) ? { email: v } : { phone: v });

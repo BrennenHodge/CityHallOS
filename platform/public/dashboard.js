@@ -18,7 +18,7 @@
   const VERIFY = { verified_current: ['Verified current', 'green'], official_unverified: ['Official, not verified', 'blue'], historical: ['Historical', ''],
     secondary: ['Secondary', 'amber'], unverified: ['Unverified', 'red'] };
   const PERMIT_STATUS = { draft: ['Draft', ''], submitted: ['Completeness check', 'blue'], needs_info: ['Waiting on applicant', 'amber'], fees_due: ['Fee due', 'violet'],
-    in_review: ['Under review', 'amber'], issued: ['Issued', 'green'], closed: ['Closed', ''], denied: ['Not approved', 'red'], withdrawn: ['Withdrawn', ''] };
+    in_review: ['Under review', 'amber'], issued: ['Issued / approved', 'green'], closed: ['Closed', ''], denied: ['Not approved', 'red'], withdrawn: ['Withdrawn', ''] };
   const CONVO_STATUS = { answered: ['Answered', 'green'], needs_review: ['Needs review', 'amber'], reviewed: ['Reviewed', 'blue'], emergency: ['Emergency', 'red'] };
 
   const store = {
@@ -247,7 +247,7 @@
     knowledge: { title: 'Knowledge base', sub: 'The documents behind every answer', icon: 'brain', render: renderKnowledge, perm: 'knowledge.view' },
     assistant: { title: 'Test the assistant', sub: 'Ask anything and see exactly what the AI read', icon: 'spark', render: renderAssistant, perm: 'assistant.test' },
     conversations: { title: 'Conversations', sub: 'What residents are asking', icon: 'chat', render: renderConversations, perm: 'conversations.view' },
-    permits: { title: 'Permit applications', sub: 'Construction permits from the AI-guided application', icon: 'file', render: renderPermits, perm: 'permits.view' },
+    permits: { title: 'Applications', sub: 'Permits, certificates and Planning Commission applications residents fill out in the AI chat', icon: 'file', render: renderPermits, perm: 'permits.view' },
     requests: { title: 'Service requests', sub: () => (state.city.department_id ? 'Requests routed to your department' : 'Issues reported by residents'), icon: 'clipboard', render: renderRequests, perm: 'requests.view' },
     channels: { title: 'Channels & embed', sub: 'Where residents reach the AI City Clerk', icon: 'plug', render: renderChannels, perm: 'channels.view' },
     staff: { title: 'Staff & access', sub: 'Who can sign in, and what each person can do', icon: 'users', render: renderStaff, perm: 'staff.manage' },
@@ -404,9 +404,9 @@
               <div class="card-b"><div class="list">${o.recentRequests.length ? o.recentRequests.map((r) => `
                 <div class="list-item clickable" data-req="${r.id}"><div class="grow"><div class="title">${esc(r.category)}</div><div class="meta"><span class="mono">${esc(r.ref)}</span> · ${esc(r.location || r.department)} · ${ago(r.created_at)}</div></div>${pill(REQ_STATUS, r.status)}</div>`).join('') : emptyNote('clipboard', 'No requests yet.')}</div></div>
             </div>
-            ${o.permits && can('permits.view') ? `<div class="card"><div class="card-h"><h2>Permit applications</h2><span class="faint" style="font-size:12.5px">${o.permits.open} open · ${o.permits.drafts} being filled out</span><a class="more" href="#/permits">Open queue</a></div>
+            ${o.permits && can('permits.view') ? `<div class="card"><div class="card-h"><h2>Applications</h2><span class="faint" style="font-size:12.5px">${o.permits.open} open · ${o.permits.drafts} being filled out</span><a class="more" href="#/permits">Open queue</a></div>
               <div class="card-b"><div class="list">${o.permits.recent.length ? o.permits.recent.map((x) => `
-                <div class="list-item clickable" data-permit="${x.id}"><div class="grow"><div class="title">${esc(x.address || 'Construction permit')}</div><div class="meta"><span class="mono">${esc(x.ref || '')}</span> · ${esc(x.applicant || '')} · ${ago(x.submitted_at)}</div></div>${pill(PERMIT_STATUS, x.status)}</div>`).join('') : emptyNote('file', 'No permit applications submitted yet.')}</div></div>
+                <div class="list-item clickable" data-permit="${x.id}"><div class="grow"><div class="title">${esc(x.address || x.title || 'Application')}</div><div class="meta"><span class="mono">${esc(x.ref || '')}</span> · ${esc(x.applicant || '')} · ${ago(x.submitted_at)}</div></div>${pill(PERMIT_STATUS, x.status)}</div>`).join('') : emptyNote('file', 'No permit applications submitted yet.')}</div></div>
             </div>` : ''}
           </div>
         </div>
@@ -941,12 +941,16 @@
   const optLabel = (opts, v) => (opts.find(([k]) => k === v) || [])[1] || v;
 
   async function renderPermits(page) {
-    const [{ permits }] = await Promise.all([api('/permits'), state.staff || !can('permits.edit') ? null : api('/staff').then((r) => { state.staff = r.staff.filter((x) => x.active); })]);
+    const [{ permits: all, forms }] = await Promise.all([api('/permits'), state.staff || !can('permits.edit') ? null : api('/staff').then((r) => { state.staff = r.staff.filter((x) => x.active); })]);
+    const kind = state.permitKind || '';
+    const permits = kind ? all.filter((x) => x.kind === kind) : all;
+    const kinds = forms.filter((f) => all.some((x) => x.kind === f.kind));
     const o = state.overview || await api('/overview');
     const lanes = [['submitted', 'Completeness check'], ['needs_info', 'Waiting on applicant'], ['fees_due', 'Fee due'], ['in_review', 'Under review'], ['issued', 'Issued'], ['done', 'Closed']];
     page.innerHTML = `
       <div class="card card-b" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
-        <div style="flex:1;min-width:260px"><b>How applications reach you</b><div class="muted" style="font-size:13px">Residents apply in the AI City Clerk chat. It collects every field on the city's form, screens the address against Census and FEMA maps, estimates the fee and runs a completeness check before anything is submitted. Staff decide completeness, fees and approval.</div></div>
+        <div style="flex:1;min-width:260px"><b>How applications reach you</b><div class="muted" style="font-size:13px">Residents fill out the city's forms in the AI City Clerk chat, usually on their phone. It collects every field on the city's form, answers their questions, screens the address against Census and FEMA maps, estimates the fee and runs a completeness check before anything is submitted. Staff decide completeness, fees and approval.</div>
+          ${kinds.length > 1 ? `<select class="select" id="pmKind" style="width:auto;margin-top:10px;height:32px;font-size:13px"><option value="">All applications (${all.length})</option>${kinds.map((f) => `<option value="${esc(f.kind)}" ${f.kind === kind ? 'selected' : ''}>${esc(f.short)} (${all.filter((x) => x.kind === f.kind).length})</option>`).join('')}</select>` : ''}</div>
         <div style="display:flex;gap:18px">${[['Being filled out', o.permits?.drafts || 0], ['Open', o.permits?.open || 0], ['Issued', o.permits?.issued || 0]].map(([l, n]) => `<div><div class="faint" style="font-size:12px">${l}</div><div style="font:650 24px var(--font-display)">${n}</div></div>`).join('')}</div>
       </div>
       <div class="board">${lanes.map(([key, label]) => {
@@ -954,13 +958,14 @@
         return `<div class="lane"><div class="lane-h">${key === 'done' ? `<span class="pill">${label}</span>` : pill(PERMIT_STATUS, key)}<span class="count">${items.length}</span></div>
           <div class="lane-cards">${items.map((x) => `
             <div class="rcard" data-id="${esc(x.id)}">
-              <div class="top"><span class="ref">${esc(x.ref)}</span>${x.errors ? `<span class="pill red">${x.errors} missing</span>` : ''}${x.concerns ? `<span class="pill violet">AI: ${x.concerns}</span>` : ''}${key === 'done' ? pill(PERMIT_STATUS, x.status) : ''}</div>
+              <div class="top"><span class="ref">${esc(x.ref)}</span><span class="pill">${esc(x.title || '')}</span>${x.errors ? `<span class="pill red">${x.errors} missing</span>` : ''}${x.concerns ? `<span class="pill violet">AI: ${x.concerns}</span>` : ''}${key === 'done' ? pill(PERMIT_STATUS, x.status) : ''}</div>
               <strong>${esc(x.address || 'Address not given')}</strong>
               ${x.summary ? `<p>${esc(x.summary)}</p>` : ''}
               <div class="foot"><span>${esc(x.applicant || '')}</span><span>·</span><span>${ago(x.updated_at)}</span>${x.fee_assessed != null ? `<span>· ${money(x.fee_assessed)}</span>` : x.fee_estimate != null ? `<span>· est. ${money(x.fee_estimate)}</span>` : ''}</div>
             </div>`).join('') || '<div class="faint" style="padding:8px 6px;font-size:12.5px">Nothing here.</div>'}</div></div>`;
       }).join('')}</div>`;
     page.onclick = (e) => { const c = e.target.closest('.rcard'); if (c) openPermitDrawer(c.dataset.id); };
+    page.querySelector('#pmKind')?.addEventListener('change', (e) => { state.permitKind = e.target.value; renderPermits(page); });
     if (state.permitId) { const id = state.permitId; state.permitId = null; openPermitDrawer(id); }
   }
 
@@ -985,27 +990,30 @@
     const shown = (f) => !f.when || Object.entries(f.when).every(([k, w]) => (Array.isArray(w) ? w.includes(d[k]) : w?.has ? (d[k] || []).includes(w.has) : w && typeof w === 'object' ? d[k] != null && d[k] !== w.not : w === true ? !!d[k] : d[k] === w));
     const ed = p.canEdit;
     const pdfUrl = `${API}/permits/${id}/pdf`;
+    const iss = p.schema.issue;
+    const noun = iss.noun === 'permit' ? 'permit' : iss.noun === 'certificate' ? 'certificate' : 'approval';
+    const inspections = iss.inspections ? `<div class="card card-b stack" style="gap:10px"><b>Inspections</b><div class="grid-2"><label class="field"><span>Inspection</span><select class="select" id="pmInsType">${iss.inspections.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
+          <label class="field"><span>Result</span><select class="select" id="pmInsRes"><option value="passed">Passed</option><option value="failed">Did not pass</option></select></label></div>
+          <input class="input" id="pmInsNote" placeholder="Notes for the applicant (optional)">
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-pm="inspection">Record inspection</button>${p.status === 'issued' ? `<button class="btn" data-pm="close">${icon('check')} Final passed: close</button>` : ''}</div></div>` : '';
     const decision = !ed ? '' : {
       submitted: `<div class="grid-2">
-          <div class="card card-b stack" style="gap:10px"><b>Complete? Set the fee</b><label class="field"><span>Permit fee</span><input class="input" id="pmFee" inputmode="decimal" value="${p.fee?.total ?? ''}"><small>${p.fee ? 'Estimate from the published fee schedule' : 'No fee schedule configured; enter the fee'}${d.work_started ? ' (doubled: work already started)' : ''}.</small></label><button class="btn btn-primary" data-pm="accept">${icon('check')} Mark complete</button></div>
+          <div class="card card-b stack" style="gap:10px"><b>Complete? Set the fee</b><label class="field"><span>Fee</span><input class="input" id="pmFee" inputmode="decimal" value="${p.fee?.total ?? ''}"><small>${p.fee ? 'Estimate from the published fee schedule' : 'No fee schedule configured; enter the fee'}${d.work_started ? ' (doubled: work already started)' : ''}.</small></label><button class="btn btn-primary" data-pm="accept">${icon('check')} Mark complete</button></div>
           <div class="card card-b stack" style="gap:10px"><b>Send back for changes</b><textarea class="textarea" id="pmItems" rows="5" placeholder="One item per line">${esc(forApplicant.filter((i) => i.level === 'error' || i.source === 'ai').map((i) => i.message).join('\n'))}</textarea><small class="faint">Drafted from the AI review and rule checks. Edit before sending.</small><button class="btn" data-pm="request_info">${icon('send')} Request changes</button></div>
         </div>`,
       fees_due: `<div class="card card-b stack" style="gap:10px"><b>Record payment</b><div class="grid-2"><label class="field"><span>Amount received</span><input class="input" id="pmAmt" inputmode="decimal" value="${p.fee_assessed ?? ''}"></label><label class="field"><span>Receipt number</span><input class="input" id="pmRcpt"></label></div><button class="btn btn-primary" data-pm="payment">${icon('check')} Payment received: start review</button></div>`,
-      in_review: `<div class="card card-b stack" style="gap:10px"><b>Approve and issue the permit</b><div class="grid-2"><label class="field"><span>Permit number</span><input class="input mono" id="pmNum" value="${esc(p.suggestedPermitNumber)}"></label><div></div></div>
-          <label class="field"><span>Conditions (printed on the permit)</span><textarea class="textarea" id="pmCond" rows="2" placeholder="Optional"></textarea></label>
-          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-pm="issue">${icon('check')} Issue permit</button><button class="btn" data-pm="request_info_prompt">Request changes</button><button class="btn btn-ghost" data-pm="deny">Not approved…</button></div></div>`,
+      in_review: `${iss.noun === 'certificate' ? inspections : ''}<div class="card card-b stack" style="gap:10px"><b>${esc(iss.action)}</b><div class="grid-2"><label class="field"><span>${esc(iss.numberLabel)}</span><input class="input mono" id="pmNum" value="${esc(p.suggestedPermitNumber)}"></label><div></div></div>
+          <label class="field"><span>Conditions (printed on the ${noun})</span><textarea class="textarea" id="pmCond" rows="2" placeholder="Optional"></textarea></label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-pm="issue">${icon('check')} ${esc(iss.action)}</button><button class="btn" data-pm="request_info_prompt">Request changes</button><button class="btn btn-ghost" data-pm="deny">Not approved…</button></div></div>`,
       needs_info: `<div class="card card-b"><b>Waiting on the applicant</b><div class="muted" style="font-size:13px;margin-top:4px">Asked ${ago(p.review?.returned?.at)} by ${esc(p.review?.returned?.by || 'staff')}. Residents get automatic reminders until they resubmit.</div><ul style="margin:8px 0 0;padding-left:18px;font-size:13px">${(p.review?.returned?.items || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`,
-      issued: `<div class="card card-b stack" style="gap:10px"><b>Inspections</b><div class="grid-2"><label class="field"><span>Inspection</span><select class="select" id="pmInsType">${['Footing / foundation', 'Slab', 'Framing', 'Electrical rough-in', 'Plumbing rough-in', 'Mechanical', 'Final'].map((x) => `<option>${x}</option>`).join('')}</select></label>
-          <label class="field"><span>Result</span><select class="select" id="pmInsRes"><option value="passed">Passed</option><option value="failed">Did not pass</option></select></label></div>
-          <input class="input" id="pmInsNote" placeholder="Notes for the applicant (optional)">
-          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-pm="inspection">Record inspection</button><button class="btn" data-pm="close">${icon('check')} Final passed: close permit</button></div></div>`,
+      issued: iss.noun === 'certificate' || !iss.inspections ? `<div class="card card-b" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="flex:1">${esc(p.schema.statuses.issued[0])}</b><button class="btn btn-sm" data-pm="close">${icon('check')} Close</button></div>` : inspections,
     }[p.status] || '';
     const dr = openDrawer(`
-      <div class="drawer-h"><div><div class="section-title mono">${esc(p.ref)}${p.permit_number ? ` · Permit ${esc(p.permit_number)}` : ''}</div><h2>${esc(p.address || d.job_address || 'Construction permit')}</h2>
-        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">${pill(PERMIT_STATUS, p.status)}<span class="pill">${esc(optLabel(p.schema.sections[0].fields.find((f) => f.key === 'construction_type').options, d.construction_type) || '')}</span><span class="pill">Submitted ${ago(p.submitted_at)}</span>${p.assignee ? `<span class="pill">${esc(p.assignee)}</span>` : ''}</div></div>
+      <div class="drawer-h"><div><div class="section-title mono">${esc(p.ref)}${p.permit_number ? ` · Permit ${esc(p.permit_number)}` : ''}</div><h2>${esc(p.address || p.schema.title)}</h2>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">${pill(PERMIT_STATUS, p.status)}<span class="pill">${esc(p.schema.short)}</span><span class="pill">Submitted ${ago(p.submitted_at)}</span>${p.assignee ? `<span class="pill">${esc(p.assignee)}</span>` : ''}</div></div>
         <button class="btn btn-ghost btn-sm close" aria-label="Close">${icon('x')}</button></div>
       <div class="drawer-b">
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-sm" href="${pdfUrl}" target="_blank" rel="noopener">${icon('file')} City application form (PDF)</a>${['issued', 'closed'].includes(p.status) ? `<a class="btn btn-sm" href="${API}/permits/${id}/permit.pdf" target="_blank" rel="noopener">${icon('file')} Permit to post</a>` : ''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-sm" href="${pdfUrl}" target="_blank" rel="noopener">${icon('file')} Application (PDF)</a>${['issued', 'closed'].includes(p.status) ? `<a class="btn btn-sm" href="${API}/permits/${id}/permit.pdf" target="_blank" rel="noopener">${icon('file')} ${iss.noun === 'permit' ? 'Permit to post' : iss.noun === 'certificate' ? 'Certificate' : 'Approval letter'} (PDF)</a>` : ''}
           ${ed ? `<select class="select" id="pmAssign" style="width:auto;height:30px;font-size:13px"><option value="">Unassigned</option>${(state.staff || []).map((x) => `<option value="${esc(x.id)}" ${x.id === p.assignee_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : ''}</div>
         <div class="card card-b" style="background:var(--violet-soft);border-color:#d9d0ff"><div style="display:flex;align-items:center;gap:8px"><div class="section-title" style="color:var(--violet)">${icon('spark')} AI review</div>
           <span class="faint" style="font-size:12px;margin-left:auto">${ai.at ? `${esc(ai.model || '')} · ${ago(ai.at)}` : 'Not run yet'}</span>${ed ? `<button class="btn btn-sm" data-pm="rereview">${icon('refresh')} Re-run</button>` : ''}</div>
@@ -1013,7 +1021,7 @@
           ${forStaff.length ? `<div class="stack" style="gap:6px;margin-top:10px"><div class="section-title">For staff to verify</div>${forStaff.map(issueRow).join('')}</div>` : ''}
           ${forApplicant.length ? `<div class="stack" style="gap:6px;margin-top:10px"><div class="section-title">Completeness</div>${forApplicant.map(issueRow).join('')}</div>` : '<div style="margin-top:8px;font-size:13px">No completeness problems found.</div>'}
           ${d.applicant_note ? `<div style="margin-top:10px;font-size:13px"><b>Applicant's note:</b> ${esc(d.applicant_note)}</div>` : ''}
-          <div class="faint" style="font-size:11.5px;margin-top:10px">The AI drafts; staff decide. It never approves permits or makes zoning, floodplain or code determinations.</div></div>
+          <div class="faint" style="font-size:11.5px;margin-top:10px">The AI drafts; staff decide. It never approves applications or makes zoning, floodplain or code determinations.</div></div>
         <div class="grid-2">
           <div class="card card-b"><div class="section-title">Address screen</div>
             <p style="margin:6px 0 0;font-size:13px">${sc.jurisdiction?.checked ? `${sc.jurisdiction.inCity ? '✓ Inside city limits' : `⚠ ${esc(sc.jurisdiction.place || 'Outside city limits')}`} (${esc(sc.jurisdiction.county || '')})<br><span class="faint">${esc(sc.matchedAddress || '')} · U.S. Census geocoder</span>` : esc(sc.jurisdiction?.error || 'Not screened')}</p>
@@ -1047,10 +1055,10 @@
       else if (a === 'request_info') act({ action: 'request_info', items: v('#pmItems').split('\n').map((x) => x.trim()).filter(Boolean) }, 'Changes requested; applicant notified');
       else if (a === 'request_info_prompt') { const t = prompt('What does the applicant need to change? One item per line.'); if (t) act({ action: 'request_info', items: t.split('\n') }, 'Changes requested'); }
       else if (a === 'payment') act({ action: 'payment', amount: Number(v('#pmAmt').replace(/[$,]/g, '')), receipt: v('#pmRcpt') }, 'Payment recorded; review started');
-      else if (a === 'issue') { if (confirm(`Issue permit ${v('#pmNum')}? The applicant is notified and can download it.`)) act({ action: 'issue', permit_number: v('#pmNum'), conditions: v('#pmCond') }, 'Permit issued'); }
+      else if (a === 'issue') { if (confirm(`${iss.action}: ${v('#pmNum')}? The applicant is notified and can download the ${noun}.`)) act({ action: 'issue', permit_number: v('#pmNum'), conditions: v('#pmCond') }, `${p.schema.statuses.issued[0]}; applicant notified`); }
       else if (a === 'deny') { const r = prompt('Reason the application is not approved (sent to the applicant):'); if (r) act({ action: 'deny', reason: r }, 'Applicant notified'); }
       else if (a === 'inspection') act({ action: 'inspection', type: v('#pmInsType'), result: v('#pmInsRes'), note: v('#pmInsNote') }, 'Inspection recorded');
-      else if (a === 'close') { if (confirm('Close this permit?')) act({ action: 'close' }, 'Permit closed'); }
+      else if (a === 'close') { if (confirm('Close this application?')) act({ action: 'close' }, 'Closed'); }
       else if (a === 'note' || a === 'message') { if (v('#pmNote')) act({ action: 'note', note: v('#pmNote'), public: a === 'message' }, a === 'message' ? 'Sent to the applicant' : 'Note saved'); }
       else if (a === 'rereview') { b.disabled = true; b.textContent = 'Reviewing…'; try { await api(`/permits/${id}/review`, { method: 'POST' }); openPermitDrawer(id); } catch (err) { toast(err.message); b.disabled = false; } }
     };

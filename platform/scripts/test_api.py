@@ -167,7 +167,13 @@ try:
     text, done = chat(A, 'What are the rules for raising goats inside city limits?')
     ok(done['flags']['needsStaff'], 'questions with no documents are flagged for staff')
     text, done = chat(A, 'I want to build a detached garage behind my house')
-    ok(done['flags'].get('offerPermit'), 'describing building work offers the permit application')
+    ok(done['flags'].get('offerForm') == 'construction', 'describing building work offers the construction permit application')
+    text, done = chat(A, 'How do I get a variance? My carport would be too close to the side property line')
+    ok(done['flags'].get('offerForm') == 'variance', 'asking about a variance offers the variance application, not a PDF')
+    s, r = anon.call('GET', f'/{A}/forms')
+    kinds = [f['kind'] for f in r.get('forms', [])]
+    ok(s == 200 and {'construction', 'variance', 'sign', 'co_residential', 'exemption'} <= set(kinds) and all('url' not in f for f in r['forms']),
+       f'the forms list is the online applications, with no PDF links ({len(kinds)} forms)')
 
     # Permit applications: the resident's side, with only the secret link.
     def upload(path, token, kind, name='deed.pdf'):
@@ -213,10 +219,51 @@ try:
     s, t = anon.call('GET', f'/{A}/track/tst-bp-1001')
     ok(s == 200 and t['status'] == 'submitted' and 'data' not in t and 'contact' not in t, 'permit tracking shows status without personal details')
 
+    # Other applications run on the same engine, each with its own number prefix.
+    s, va = anon.call('POST', f'/{A}/permits', {'kind': 'variance'})
+    ok(s == 201 and va['kind'] == 'variance' and va['ask'], 'a resident starts a variance application')
+    vtok = {'X-Permit-Token': va['token']}
+    s, r = anon.call('POST', f"/{A}/permits/{va['id']}/message", {'text': 'What is a variance?', 'ask': va['ask']['id']}, vtok)
+    ok(s == 200 and r.get('question') and r['reply'] and r['ask']['id'] == va['ask']['id'], 'a question mid-application is answered, then the same question is asked again')
+    s, sc = anon.call('GET', f'/{A}/permits/schema/sign')
+    ok(s == 200 and sc['kind'] == 'sign' and sc['issue']['noun'] == 'permit' and sc['sections'], 'each form publishes its own schema')
+    s, co = anon.call('POST', f'/{A}/permits', {'kind': 'co_residential'})
+    s, r = anon.call('POST', f"/{A}/permits/{co['id']}/submit", {}, {'X-Permit-Token': co['token']})
+    ok(s == 400 and r.get('checks'), "an incomplete certificate of occupancy application can't be submitted")
+    s, r = anon.call('POST', f'/{A}/permits', {'kind': 'not_a_form'})
+    ok(s == 400, 'unknown application types are refused')
+
+    # Residents sign in with a phone number; their applications follow them.
+    s, r = anon.call('POST', f'/{A}/me/code', {'phone': '601-555-0177'})
+    if s == 503:
+        print('  (phone sign-in skipped: text messages are not set up here)')
+    else:
+        ok(s == 200 and r.get('devCode'), 'a sign-in code is sent to a phone number (shown on screen locally)')
+        s, bad = anon.call('POST', f'/{A}/me/verify', {'phone': '6015550177', 'code': '000000' if r['devCode'] != '000000' else '111111'})
+        ok(s == 400, 'a wrong code is refused')
+        s, v = anon.call('POST', f'/{A}/me/verify', {'phone': '(601) 555-0177', 'code': r['devCode']})
+        ok(s == 200 and v.get('token') and v['profile']['phone'] == '(601) 555-0177', 'the right code signs the resident in')
+        me = {'X-Resident-Token': v['token']}
+        s, _ = anon.call('POST', f'/{A}/me/verify', {'phone': '6015550177', 'code': r['devCode']})
+        ok(s == 400, 'a sign-in code works only once')
+        anon.call('PATCH', f'/{A}/me', {'name': 'Rita Resident', 'email': 'rita@example.test'}, me)
+        s, c = anon.call('POST', f'/{A}/me/claim', {'applications': [{'id': va['id'], 'token': va['token']}, {'id': co['id'], 'token': 'wrong'}]}, me)
+        ok(s == 200 and c['claimed'] == 1, 'applications started on this device join the account, only with their secret link')
+        s, ex = anon.call('POST', f'/{A}/permits', {'kind': 'exemption'}, me)
+        s, r = anon.call('PATCH', f"/{A}/permits/{ex['id']}", {'data': {'applicant_role': 'owner'}}, {'X-Permit-Token': ex['token'], **me})
+        ok(r['data'].get('owner_name') == 'Rita Resident' and r['data'].get('owner_email') == 'rita@example.test', "the resident's profile fills in their details")
+        s, m = anon.call('GET', f'/{A}/me', headers=me)
+        ok(s == 200 and {a['id'] for a in m['applications']} >= {va['id'], ex['id']} and all(a['token'] for a in m['applications']), 'My applications lists them on any device')
+        s, _ = anon.call('GET', f'/{B}/me', headers=me)
+        ok(s == 401, "a resident's sign-in doesn't carry over to another city")
+        anon.call('POST', f'/{A}/me/logout', {}, me)
+        s, _ = anon.call('GET', f'/{A}/me', headers=me)
+        ok(s == 401, 'signing out ends the session')
+
     # Permit applications: City Hall's side.
     planner, _, _, _ = onboard('Pia Planning', 'department', 'planning-building')
     s, r = planner.call('GET', f'/{A}/permits')
-    ok(s == 200 and [x['ref'] for x in r['permits']] == ['TST-BP-1001'], 'permit staff see submitted applications, not drafts')
+    ok(s == 200 and [x['ref'] for x in r['permits']] == ['TST-BP-1001'] and r['permits'][0]['title'] == 'Construction permit', 'permit staff see submitted applications, not drafts')
     s, r = editor.call('GET', f'/{A}/permits/{pid}')
     ok(s == 200 and r['data']['owner_email'] == 'Hidden' and not r['canEdit'], "roles without resident contact access see the application with contact details hidden")
     s, _ = works.call('POST', f'/{A}/permits/{pid}/actions', {'action': 'accept', 'fee': 50})

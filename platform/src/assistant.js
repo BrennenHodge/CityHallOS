@@ -34,11 +34,6 @@ export function detectReport(text) {
   return null;
 }
 
-// A resident describing building work, or asking for a construction permit, can start an application.
-const PERMIT_WORK = /\b(build|construct|put up|erect|add(ing)? (on|an? addition|a room)|addition|remodel|renovat\w*|demolish|tear down|pour (a )?slab)\b/i;
-const PERMIT_THING = /\b(garage|carport|shed|house|home|addition|room|porch|deck|building|barn|workshop|slab|structure|office|store|church|duplex|bedroom|bathroom|kitchen)\b/i;
-export const detectPermit = (text) => (PERMIT_WORK.test(text) && PERMIT_THING.test(text)) || /\b(building|construction) permit\b/i.test(text);
-
 const VERIFICATION_NOTE = {
   verified_current: 'verified current by City Hall',
   official_unverified: 'official, not yet confirmed current',
@@ -57,7 +52,8 @@ const authorityNote = (s, a) => ({
   'curated-research': 'researched summary prepared for City Hall OS',
 }[a] || a);
 
-export function systemPrompt(s) {
+// forms: the applications residents can fill out in the chat (permits/routes.js formList).
+export function systemPrompt(s, forms = []) {
   return `You are ${s.assistantName}, the AI City Clerk for the ${s.cityName}, ${s.state} (${s.county}). You are the city's virtual front desk on its website.${s.disambiguation ? ' ' + s.disambiguation : ''}
 
 How to answer:
@@ -71,7 +67,8 @@ How to answer:
 - Independent news reports are not official minutes. Say "local news reported" and suggest confirming with the City Clerk.
 - If the sources don't answer the question, say plainly that you don't have that in the city's documents yet, give the City Hall phone number (${s.phone}), say you've flagged the question for City Hall staff, and end your reply with the exact token <<NEEDS_STAFF>>.
 - If the resident is reporting a problem the city should fix (pothole, water leak, streetlight out, missed trash, drainage, downed tree, overgrown lot), briefly acknowledge it and end your reply with the exact token <<OFFER_REPORT>> so the chat can open the report form.
-- If anything sounds like an emergency or danger to life or property, tell them to call 911 right away.
+- If anything sounds like an emergency or danger to life or property, tell them to call 911 right away.${forms.length ? `
+- Residents can fill out these applications online, right here in this chat: ${forms.map((f) => `${f.title} (${f.kind})`).join('; ')}. When a resident needs one, say they can start it here in the chat, and end your reply with the exact token <<FORM:kind>> using the kind in parentheses, so the chat shows a button. Never tell them to download, print or fill out a PDF form; the online application replaces it, and the chat's AI helper answers questions while they fill it out.` : ''}
 - Never ask for or repeat sensitive personal data (Social Security numbers, card numbers, passwords).`;
 }
 
@@ -169,9 +166,9 @@ export async function completeJson(env, system, user, maxTokens = 1500) {
 // Removes control tokens from streamed text without splitting them across chunks.
 export function tokenFilter() {
   let pending = '';
-  const flags = { needsStaff: false, offerReport: false };
-  const strip = (s) => s.replace(/<<\s*(NEEDS_STAFF|OFFER_REPORT)\s*>>/g, (_, k) => {
-    if (k === 'NEEDS_STAFF') flags.needsStaff = true; else flags.offerReport = true;
+  const flags = { needsStaff: false, offerReport: false, formToken: null };
+  const strip = (s) => s.replace(/\s*<<\s*(NEEDS_STAFF|OFFER_REPORT|FORM:\s*([a-z_]+))\s*>>/g, (_, k, kind) => {
+    if (k === 'NEEDS_STAFF') flags.needsStaff = true; else if (k === 'OFFER_REPORT') flags.offerReport = true; else flags.formToken = kind;
     return '';
   });
   return {
@@ -179,7 +176,7 @@ export function tokenFilter() {
     push(text) {
       pending = strip(pending + text);
       // Hold back a trailing fragment that could still become a token, e.g. " <<NEEDS_".
-      const partial = pending.match(/\s*<{1,2}\s*[A-Z_]*>?$/);
+      const partial = pending.match(/\s*<{1,2}\s*[A-Za-z_:]*>?$/);
       if (partial) {
         const out = pending.slice(0, partial.index);
         pending = pending.slice(partial.index);
@@ -189,6 +186,6 @@ export function tokenFilter() {
       pending = '';
       return out;
     },
-    end() { const out = strip(pending); pending = ''; return out.replace(/\s*<{1,2}\s*[A-Z_]*>?$/, ''); },
+    end() { const out = strip(pending); pending = ''; return out.replace(/\s*<{1,2}\s*[A-Za-z_:]*>?$/, ''); },
   };
 }

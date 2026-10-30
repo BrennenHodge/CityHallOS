@@ -5,12 +5,14 @@
 //   env.CITY_STORE  one database per city: knowledge base, conversations, requests, audit log
 import { chunkText, extractText, guessMime } from './ingest.js';
 import { search } from './search.js';
-import { buildUserMessage, detectPermit, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
+import { buildUserMessage, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
-import { permitRoute, sendPermitReminders } from './permits/routes.js';
+import { enabledForms, formList, permitRoute, sendPermitReminders, tokenFor } from './permits/routes.js';
+import { FORMS, detectForm } from './permits/forms/index.js';
+import { residentRoute } from './residents.js';
 
 export { CityStore } from './store.js';
 export { AuthService } from './auth.js';
@@ -18,7 +20,7 @@ export { AuthService } from './auth.js';
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Permit-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Permit-Token, X-Resident-Token',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -152,7 +154,8 @@ async function route(request, env, ctx, url) {
     if (res === 'chat' && m === 'POST') return chat(request, env, ctx, city, store, me);
     if (res === 'requests' && m === 'POST' && !id) return createRequest(request, env, city, store, me);
     if (res === 'track' && m === 'GET' && id) return trackRequest(store, id);
-    if (res === 'forms' && m === 'GET') return listForms(city, store);
+    if (res === 'forms' && m === 'GET') return json({ forms: formList(city) }, 200, { 'Cache-Control': 'public, max-age=300' });
+    if (res === 'me') return residentRoute({ request, env, url, city, store, sub: id, tokenFor });
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
     if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   }
@@ -210,7 +213,8 @@ async function publicConfig(city, store) {
     city: city.slug, cityName: s.cityName, assistantName: s.assistantName, tagline: s.tagline, greeting: s.greeting,
     brandColor: s.brandColor, suggestions: s.suggestions, phone: s.phone, policeNonEmergency: s.policeNonEmergency,
     requestTypes: (await store.requestTypes()).map(({ key, label }) => ({ key, label })),
-    permits: s.permits?.construction?.enabled !== false,
+    permits: enabledForms(city).length > 0,
+    forms: formList(city).map(({ kind, short, icon }) => ({ kind, short, icon })),
   }, 200, { 'Cache-Control': 'public, max-age=60' });
 }
 
@@ -389,7 +393,7 @@ async function chat(request, env, ctx, city, store, me) {
   const run = async () => {
     let answer = '';
     let sources = [];
-    let flags = { needsStaff: false, offerReport: false, emergency: false, offerPermit: false };
+    let flags = { needsStaff: false, offerReport: false, emergency: false, offerForm: null };
     let reportType = null;
     try {
       const emergency = isEmergency(question);
@@ -413,12 +417,14 @@ async function chat(request, env, ctx, city, store, me) {
         const lastUser = [...history].reverse().find((h) => h.role === 'user');
         const q = question.split(/\s+/).length < 6 && lastUser ? `${lastUser.content} ${question}` : question;
         const hits = await search(env, store, s, q, { includeInternal: staff, limit: 6 });
+        const online = formList(city);
+        const formOf = (url) => online.find((x) => url && x.formUrls.includes(url))?.kind || null;
         sources = [
           { n: 1, title: 'City Hall contact information', category: 'City profile', url: s.website || null, as_of: 'current', authority: 'staff-note' },
           ...hits.map((h, i) => ({
             n: i + 2, docId: h.doc.id, title: h.doc.title, heading: h.heading, category: h.doc.category,
             url: h.doc.source_url || (h.doc.file_key ? `/api/${city.slug}/documents/${h.doc.id}/file` : null),
-            as_of: h.doc.as_of, authority: h.doc.authority, verification: h.doc.verification, visibility: h.doc.visibility,
+            as_of: h.doc.as_of, authority: h.doc.authority, verification: h.doc.verification, visibility: h.doc.visibility, form: formOf(h.doc.source_url),
             ...(staff ? { score: Math.round(h.score * 1000) / 1000, excerpt: h.text.slice(0, 400) } : {}),
           })),
         ];
@@ -428,7 +434,7 @@ async function chat(request, env, ctx, city, store, me) {
           { role: 'user', content: buildUserMessage(s, question, hits) },
         ];
         const filter = tokenFilter();
-        for await (const piece of generate(env, systemPrompt(s), messages)) {
+        for await (const piece of generate(env, systemPrompt(s, online), messages)) {
           const out = filter.push(piece);
           if (out) { answer += out; await send('delta', { t: out }); }
         }
@@ -447,8 +453,15 @@ async function chat(request, env, ctx, city, store, me) {
       await send('delta', { t: msg }).catch(() => {});
     }
 
-    flags.offerPermit = !flags.emergency && !reportType && s.permits?.construction?.enabled !== false && detectPermit(question);
     const cited = citedNumbers(answer);
+    // Offer the online application the resident needs: what they asked for, or the city form the answer cites.
+    if (!flags.emergency && !reportType) {
+      const kinds = enabledForms(city).map((x) => x.kind);
+      const asked = detectForm(question);
+      const citedForm = sources.find((x) => cited.has(x.n) && x.form)?.form;
+      flags.offerForm = [flags.formToken, asked, citedForm].find((k) => k && kinds.includes(k)) || null;
+    }
+    delete flags.formToken;
     const used = sources.filter((x) => cited.has(x.n));
     await send('done', { convoId, flags, cited: [...cited], reportType }).catch(() => {});
     await writer.close().catch(() => {});
@@ -592,12 +605,6 @@ async function documentFile(env, store, id, me) {
       'Cache-Control': doc.visibility === 'public' ? 'public, max-age=3600' : 'private, no-store', ...CORS,
     },
   });
-}
-
-async function listForms(city, store) {
-  const forms = await store.listForms();
-  return json({ forms: forms.map((f) => ({ id: f.id, title: f.title, description: f.notes, as_of: f.as_of, verification: f.verification,
-    url: f.source_url || (f.has_file ? `/api/${city.slug}/documents/${f.id}/file` : null) })) }, 200, { 'Cache-Control': 'public, max-age=300' });
 }
 
 async function searchPreview(env, city, store, url) {
@@ -847,25 +854,34 @@ async function saveSettings(request, env, city, store, me) {
   return json((await getCity(env, city.slug)).settings);
 }
 
-// Permit options staff can change. Fee tiers follow the shape permitFee() in permits/construction.js reads.
+// Application options staff can change, per form. Construction fee tiers follow the shape tieredFee() in permits/engine.js reads.
 function permitSettings(input, current) {
-  const c = { ...(current.construction || {}) };
-  const b = input.construction || {};
-  if ('enabled' in b) c.enabled = !!b.enabled;
-  if ('autoReturn' in b) c.autoReturn = !!b.autoReturn;
-  if ('paymentInstructions' in b) c.paymentInstructions = clean(b.paymentInstructions, 600) ?? '';
-  if ('department' in b) c.department = clean(b.department, 60) ?? 'planning-building';
-  if ('formUrl' in b) c.formUrl = clean(b.formUrl, 500);
-  if ('pdfTemplate' in b) c.pdfTemplate = clean(b.pdfTemplate, 60);
-  if (b.fees && typeof b.fees === 'object') {
-    const tiers = (Array.isArray(b.fees.tiers) ? b.fees.tiers : []).slice(0, 20).map((t) => ({
-      upTo: t.upTo == null ? null : Number(t.upTo),
-      ...(t.fee != null ? { fee: Number(t.fee) } : { base: Number(t.base), over: Number(t.over), per: Number(t.per) || 1000, add: Number(t.add) }),
-    })).filter((t) => Object.values(t).every((v) => v === null || Number.isFinite(v)));
-    c.fees = {
-      tiers, doubleIfStarted: !!b.fees.doubleIfStarted, planReviewShare: Number(b.fees.planReviewShare) || 0,
-      notes: (Array.isArray(b.fees.notes) ? b.fees.notes : []).map((x) => clean(x, 300)).filter(Boolean).slice(0, 10), source: clean(b.fees.source, 300),
-    };
+  const out = { ...current };
+  for (const { kind } of FORMS) {
+    const b = input[kind];
+    if (!b || typeof b !== 'object') continue;
+    const c = { ...(current[kind] || {}) };
+    if ('enabled' in b) c.enabled = !!b.enabled;
+    if ('autoReturn' in b) c.autoReturn = !!b.autoReturn;
+    if ('paymentInstructions' in b) c.paymentInstructions = clean(b.paymentInstructions, 600) ?? '';
+    if ('department' in b) c.department = clean(b.department, 60) ?? 'planning-building';
+    if ('formUrl' in b) c.formUrl = clean(b.formUrl, 500);
+    if ('pdfTemplate' in b) c.pdfTemplate = clean(b.pdfTemplate, 60);
+    if (b.fees && typeof b.fees === 'object') {
+      const f = b.fees;
+      const tiers = (Array.isArray(f.tiers) ? f.tiers : []).slice(0, 20).map((t) => ({
+        upTo: t.upTo == null ? null : Number(t.upTo),
+        ...(t.fee != null ? { fee: Number(t.fee) } : { base: Number(t.base), over: Number(t.over), per: Number(t.per) || 1000, add: Number(t.add) }),
+      })).filter((t) => Object.values(t).every((v) => v === null || Number.isFinite(v)));
+      // Flat and per-square-foot amounts some forms read (sign: base + perSqFt over includedSqFt; CO: multiTenantSmall).
+      const nums = Object.fromEntries(['flat', 'base', 'includedSqFt', 'perSqFt', 'multiTenantSmall', 'smallMaxSqFt', 'planReviewShare']
+        .filter((k) => f[k] != null && Number.isFinite(Number(f[k]))).map((k) => [k, Number(f[k])]));
+      c.fees = {
+        ...(tiers.length ? { tiers } : {}), ...nums, ...('doubleIfStarted' in f ? { doubleIfStarted: !!f.doubleIfStarted } : {}),
+        label: clean(f.label, 120), notes: (Array.isArray(f.notes) ? f.notes : []).map((x) => clean(x, 300)).filter(Boolean).slice(0, 10), source: clean(f.source, 300),
+      };
+    }
+    out[kind] = c;
   }
-  return { ...current, construction: c };
+  return out;
 }
