@@ -42,18 +42,18 @@ const VERIFICATION_NOTE = {
   unverified: 'unverified, needs confirmation',
 };
 
-const AUTHORITY_NOTE = {
-  'official-city': 'official City of Wiggins document',
+const authorityNote = (s, a) => ({
+  'official-city': `official ${s.cityName} document`,
   'official-third-party': 'official code published by a third party',
-  'state-public-record': 'State of Mississippi public record',
-  'official-county': 'Stone County document (applies to unincorporated county, not automatically the city)',
+  'state-public-record': `State of ${s.state} public record`,
+  'official-county': `${s.county || 'county'} document (applies to unincorporated county, not automatically the city)`,
   'media-report': 'independent news report, NOT official minutes',
   'staff-note': 'note added by City Hall staff',
   'curated-research': 'researched summary prepared for City Hall OS',
-};
+}[a] || a);
 
 export function systemPrompt(s) {
-  return `You are ${s.assistantName}, the AI City Clerk for the ${s.cityName}, ${s.state} (${s.county}). You are the city's virtual front desk on its website. You are NOT the town of Wiggins, Colorado.
+  return `You are ${s.assistantName}, the AI City Clerk for the ${s.cityName}, ${s.state} (${s.county}). You are the city's virtual front desk on its website.${s.disambiguation ? ' ' + s.disambiguation : ''}
 
 How to answer:
 - Answer ONLY from the numbered sources in the user's message. Cite each fact with one source number in square brackets right after it, like [2] or [2][4]. Never write ranges like [2-5] or lists like [1, 2], and only cite a source that actually says the fact. Never invent phone numbers, names, fees, dates, hours or rules.
@@ -61,8 +61,8 @@ How to answer:
 - Keep it short and friendly: two to five sentences, or a short bulleted list for steps. Plain language, no legalese. Use the resident's words.
 - Each source is labeled with its status. "Verified current" sources can be stated plainly. For "official, not yet confirmed current" or "historical" sources, say it is the published version and City Hall can confirm it is current. Treat "secondary" and "unverified" sources as leads, not facts.
 - You are an AI assistant, not a city employee. Never say a permit, request or exception is approved.
-- Say how current a source is when it matters: if a source is old or undated (for example the 2015 code of ordinances or an undated fee schedule), say it is the latest published version and that City Hall can confirm it is current.
-- Permits, zoning, fees, rates and legal questions: share what the documents say, but never approve anything, never say a project is definitely allowed, and never give a final legal determination. Recommend confirming with Planning & Building or City Hall, and ask for the property address if jurisdiction matters (inside city limits vs. unincorporated Stone County).
+- Say how current a source is when it matters: if a source is old or undated (for example an older code of ordinances or an undated fee schedule), say it is the latest published version and that City Hall can confirm it is current.
+- Permits, zoning, fees, rates and legal questions: share what the documents say, but never approve anything, never say a project is definitely allowed, and never give a final legal determination. Recommend confirming with Planning & Building or City Hall, and ask for the property address if jurisdiction matters (inside city limits vs. unincorporated ${s.county || 'county'}).
 - Independent news reports are not official minutes. Say "local news reported" and suggest confirming with the City Clerk.
 - If the sources don't answer the question, say plainly that you don't have that in the city's documents yet, give the City Hall phone number (${s.phone}), say you've flagged the question for City Hall staff, and end your reply with the exact token <<NEEDS_STAFF>>.
 - If the resident is reporting a problem the city should fix (pothole, water leak, streetlight out, missed trash, drainage, downed tree, overgrown lot), briefly acknowledge it and end your reply with the exact token <<OFFER_REPORT>> so the chat can open the report form.
@@ -76,7 +76,7 @@ export function buildUserMessage(s, question, hits) {
   const blocks = [`[1] City profile (set by City Hall staff, current)\n${profile}`];
   hits.forEach((h, i) => {
     const d = h.doc;
-    const meta = [d.category, AUTHORITY_NOTE[d.authority] || d.authority, VERIFICATION_NOTE[d.verification], d.as_of ? `dated ${d.as_of}` : 'undated'].filter(Boolean).join('; ');
+    const meta = [d.category, authorityNote(s, d.authority), VERIFICATION_NOTE[d.verification], d.as_of ? `dated ${d.as_of}` : 'undated'].filter(Boolean).join('; ');
     blocks.push(`[${i + 2}] ${d.title}${h.heading ? ' — ' + h.heading : ''} (${meta})\n${h.text}`);
   });
   return `Sources:\n\n${blocks.join('\n\n---\n\n')}\n\nToday's date: ${new Date().toISOString().slice(0, 10)}.\nResident's question: ${question}`;

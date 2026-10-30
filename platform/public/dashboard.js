@@ -1,8 +1,9 @@
 /* City Hall OS staff dashboard. Vanilla JS, no build step. */
 (() => {
-  const CITY = 'wiggins';
-  const API = `/api/${CITY}`;
-  const PUBLIC_SITE = 'https://wiggins.cityhallos.com';
+  // Set once the signed-in person picks (or has) a city.
+  let CITY = '';
+  let API = '';
+  let PUBLIC_SITE = '';
   const EMBED_SRC = `${location.origin}/embed.js`;
   const CATEGORIES = ['City Hall & Government', 'Ordinances & Code', 'Permits & Forms', 'Planning & Zoning', 'Utilities & Payments',
     'City Services', 'Public Safety', 'Municipal Court', 'Budget & Finance', 'Meetings & Minutes', 'Plans & Studies',
@@ -23,8 +24,10 @@
     set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
     del: (k) => { try { localStorage.removeItem(k); } catch { /* private mode */ } },
   };
-  let token = store.get('chos_token');
-  const state = { docs: [], cat: '', q: '', convoFilter: '', convoId: null, overview: null };
+  store.del('chos_token'); // the old shared access code; sign-in now uses a session cookie
+  const state = { docs: [], cat: '', q: '', convoFilter: '', convoId: null, overview: null, me: null, city: null };
+  const can = (perm) => !!state.city && (state.city.perms.includes('*') || state.city.perms.includes(perm));
+  const host = (u) => { try { return new URL(u).host; } catch { return ''; } };
 
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -60,11 +63,11 @@
   }
 
   async function api(path, opts = {}) {
-    const headers = { Authorization: `Bearer ${token}`, ...(opts.headers || {}) };
+    const headers = { ...(opts.headers || {}) };
     let body = opts.body;
     if (body && !(body instanceof FormData) && typeof body !== 'string') { body = JSON.stringify(body); headers['Content-Type'] = 'application/json'; }
     const res = await fetch(API + path, { ...opts, headers, body });
-    if (res.status === 401) { signOut(); throw new Error('Please sign in again'); }
+    if (res.status === 401) { boot(); throw new Error('Please sign in again'); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
     return data;
@@ -101,7 +104,7 @@
   // Server-sent events from POST /chat.
   async function streamChat(body, on) {
     const res = await fetch(`${API}/chat`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || 'Chat failed'); }
     const reader = res.body.getReader();
@@ -121,63 +124,155 @@
     }
   }
 
-  /* ---------------- Auth ---------------- */
+  /* ---------------- Sign-in ---------------- */
 
-  function signOut() { token = null; store.del('chos_token'); renderLogin(); }
+  async function signOut() {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    state.me = null; state.city = null;
+    renderLogin();
+  }
 
-  function renderLogin(err = '') {
+  function loginCard(inner) {
     app.innerHTML = `
       <div class="login">
         <div class="login-card">
           <div class="brand"><img src="/favicon.svg" alt=""><span>City Hall <span>OS</span></span></div>
-          <h1>City of Wiggins staff dashboard</h1>
-          <p>Manage the knowledge base behind your AI City Clerk, review resident conversations, and work service requests.</p>
-          <form id="loginForm">
-            <label class="field"><span>Staff access code</span><input class="input" id="code" type="password" autocomplete="current-password" required autofocus></label>
-            <div class="login-error" id="loginErr">${esc(err)}</div>
-            <button class="btn btn-primary" type="submit">${icon('lock')} Sign in</button>
-          </form>
+          ${inner}
         </div>
       </div>`;
+  }
+
+  async function postJson(url, body) {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Something went wrong');
+    return data;
+  }
+
+  function renderLogin(err = '', operator = false) {
+    loginCard(operator ? `
+      <h1>City Hall OS support</h1>
+      <p>Sign in with the platform access code.</p>
+      <form id="loginForm">
+        <label class="field"><span>Access code</span><input class="input" id="code" type="password" autocomplete="current-password" required autofocus></label>
+        <div class="login-error" id="loginErr">${esc(err)}</div>
+        <button class="btn btn-primary" type="submit">${icon('lock')} Sign in</button>
+        <button class="btn btn-ghost" type="button" id="swap">Staff sign-in</button>
+      </form>` : `
+      <h1>Staff dashboard</h1>
+      <p>Manage the knowledge base behind your AI City Clerk, review resident conversations, and work service requests.</p>
+      <form id="loginForm">
+        <label class="field"><span>Email</span><input class="input" id="email" type="email" autocomplete="username" required autofocus></label>
+        <label class="field"><span>Password</span><input class="input" id="password" type="password" autocomplete="current-password" required></label>
+        <div class="login-error" id="loginErr">${esc(err)}</div>
+        <button class="btn btn-primary" type="submit">${icon('lock')} Sign in</button>
+        <p class="faint" style="margin:4px 0 0;font-size:12.5px">New here or forgot your password? Ask your City Hall administrator for a setup link.</p>
+        <button class="btn btn-ghost btn-sm" type="button" id="swap" style="justify-self:center">City Hall OS support</button>
+      </form>`);
+    $('#swap').onclick = () => renderLogin('', !operator);
     $('#loginForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const code = $('#code').value.trim();
-      const res = await fetch('/api/auth/check', { headers: { Authorization: `Bearer ${code}` } });
-      if (!res.ok) { $('#loginErr').textContent = 'That access code is not valid.'; return; }
-      token = code; store.set('chos_token', code); renderShell();
+      const btn = e.submitter;
+      btn.disabled = true;
+      try {
+        const me = operator
+          ? await postJson('/api/auth/operator', { code: $('#code').value.trim() })
+          : await postJson('/api/auth/login', { email: $('#email').value.trim(), password: $('#password').value });
+        start(me);
+      } catch (err2) { $('#loginErr').textContent = err2.message; btn.disabled = false; }
     });
   }
 
+  async function renderSetup(token) {
+    const res = await fetch(`/api/auth/setup?token=${encodeURIComponent(token)}`);
+    const info = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      loginCard(`<h1>This link has expired</h1><p>${esc(info.error || 'Ask your administrator for a new setup link.')}</p><a class="btn btn-primary" href="/">Go to sign-in</a>`);
+      return;
+    }
+    loginCard(`
+      <h1>Welcome, ${esc(info.name.split(' ')[0])}</h1>
+      <p>Choose a password for <b>${esc(info.email)}</b>. You'll use it to sign in to the City Hall OS dashboard.</p>
+      <form id="setupForm">
+        <input type="email" value="${esc(info.email)}" autocomplete="username" hidden>
+        <label class="field"><span>New password</span><input class="input" id="pw1" type="password" autocomplete="new-password" minlength="10" required autofocus><small>At least 10 characters.</small></label>
+        <label class="field"><span>Type it again</span><input class="input" id="pw2" type="password" autocomplete="new-password" required></label>
+        <div class="login-error" id="loginErr"></div>
+        <button class="btn btn-primary" type="submit">${icon('check')} Set password and sign in</button>
+      </form>`);
+    $('#setupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if ($('#pw1').value !== $('#pw2').value) { $('#loginErr').textContent = "The passwords don't match."; return; }
+      try {
+        const me = await postJson('/api/auth/setup', { token, password: $('#pw1').value });
+        history.replaceState(null, '', '/#/overview');
+        start(me);
+      } catch (err) { $('#loginErr').textContent = err.message; }
+    });
+  }
+
+  function start(me) {
+    state.me = me;
+    if (!me.cities.length) {
+      loginCard(`<h1>No city yet</h1><p>Your account isn't connected to a city. Ask your City Hall administrator to give you access.</p><button class="btn" id="out">Sign out</button>`);
+      $('#out').onclick = signOut;
+      return;
+    }
+    const saved = store.get('chos_city');
+    selectCity(me.cities.find((c) => c.slug === saved) || me.cities[0]);
+  }
+
+  function selectCity(c) {
+    state.city = c;
+    CITY = c.slug;
+    API = `/api/${CITY}`;
+    PUBLIC_SITE = c.publicSite || '';
+    store.set('chos_city', c.slug);
+    Object.assign(state, { docs: [], cat: '', q: '', convoFilter: '', convoId: null, overview: null, staff: null, departments: null, roles: null });
+    renderShell();
+  }
+
+  async function boot() {
+    const setup = location.hash.match(/^#\/setup\/([\w-]+)/);
+    if (setup) return renderSetup(setup[1]);
+    const res = await fetch('/api/auth/me').catch(() => null);
+    if (res?.ok) start(await res.json()); else renderLogin();
+  }
   /* ---------------- Shell & routing ---------------- */
 
   const ROUTES = {
-    overview: { title: 'Overview', sub: 'How the AI City Clerk is serving Wiggins', icon: 'grid', render: renderOverview },
-    knowledge: { title: 'Knowledge base', sub: 'The documents behind every answer', icon: 'brain', render: renderKnowledge },
-    assistant: { title: 'Test the assistant', sub: 'Ask anything and see exactly what the AI read', icon: 'spark', render: renderAssistant },
-    conversations: { title: 'Conversations', sub: 'What residents are asking', icon: 'chat', render: renderConversations },
-    requests: { title: 'Service requests', sub: 'Issues reported by residents', icon: 'clipboard', render: renderRequests },
-    channels: { title: 'Channels & embed', sub: 'Where residents reach the AI City Clerk', icon: 'plug', render: renderChannels },
-    settings: { title: 'Settings', sub: 'Assistant and city profile', icon: 'gear', render: renderSettings },
+    overview: { title: 'Overview', sub: () => `How the AI City Clerk is serving ${state.city.shortName}`, icon: 'grid', render: renderOverview, perm: 'overview' },
+    knowledge: { title: 'Knowledge base', sub: 'The documents behind every answer', icon: 'brain', render: renderKnowledge, perm: 'knowledge.view' },
+    assistant: { title: 'Test the assistant', sub: 'Ask anything and see exactly what the AI read', icon: 'spark', render: renderAssistant, perm: 'assistant.test' },
+    conversations: { title: 'Conversations', sub: 'What residents are asking', icon: 'chat', render: renderConversations, perm: 'conversations.view' },
+    requests: { title: 'Service requests', sub: () => (state.city.department_id ? 'Requests routed to your department' : 'Issues reported by residents'), icon: 'clipboard', render: renderRequests, perm: 'requests.view' },
+    channels: { title: 'Channels & embed', sub: 'Where residents reach the AI City Clerk', icon: 'plug', render: renderChannels, perm: 'channels.view' },
+    staff: { title: 'Staff & access', sub: 'Who can sign in, and what each person can do', icon: 'users', render: renderStaff, perm: 'staff.manage' },
+    activity: { title: 'Activity', sub: 'Every change, by whom and when', icon: 'refresh', render: renderActivity, perm: 'audit.view' },
+    settings: { title: 'Settings', sub: 'Assistant and city profile', icon: 'gear', render: renderSettings, perm: 'settings.edit' },
   };
 
+  const roleLabel = (key) => (state.me.operator ? 'Platform operator' : (state.me.roles.find((r) => r.key === key) || {}).label || key);
+
   function renderShell() {
+    const c = state.city;
     app.innerHTML = `
       <div class="shell">
         <aside class="side" id="side">
           <div class="brand"><img src="/favicon.svg" alt=""><span>City Hall <span>OS</span></span></div>
-          <div class="city-card"><div class="city-seal">W</div><div><strong>City of Wiggins</strong><small>Stone County, Mississippi</small></div></div>
+          <div class="city-card"><div class="city-seal" style="background:${esc(c.brandColor || '#1f5c46')}">${esc((c.shortName || c.name)[0])}</div>
+            <div style="min-width:0"><strong>${esc(c.name)}</strong><small>${esc([c.county, c.state].filter(Boolean).join(', '))}</small></div></div>
+          ${state.me.cities.length > 1 ? `<select class="select city-switch" id="citySwitch" aria-label="Switch city">${state.me.cities.map((x) => `<option value="${esc(x.slug)}" ${x.slug === c.slug ? 'selected' : ''}>${esc(x.name)}${x.status !== 'active' ? ` (${esc(x.status)})` : ''}</option>`).join('')}</select>` : ''}
           <nav class="nav" aria-label="Dashboard">
-            ${navLink('overview')}
-            <div class="nav-label">Brain</div>
-            ${navLink('knowledge')}${navLink('assistant')}
-            <div class="nav-label">Residents</div>
-            ${navLink('conversations', 'navReview')}${navLink('requests', 'navReq')}
-            <div class="nav-label">Setup</div>
-            ${navLink('channels')}${navLink('settings')}
+            ${navGroup('', ['overview'])}
+            ${navGroup('Brain', ['knowledge', 'assistant'])}
+            ${navGroup('Residents', [['conversations', 'navReview'], ['requests', 'navReq']])}
+            ${navGroup('Setup', ['channels', 'staff', 'activity', 'settings'])}
           </nav>
           <div class="side-foot">
             <div class="model-chip">${icon('spark')}<span>AI model<br><code id="modelName">loading…</code></span></div>
-            <a href="${PUBLIC_SITE}" target="_blank" rel="noopener">${icon('globe')} View wiggins.cityhallos.com</a>
+            ${PUBLIC_SITE ? `<a href="${esc(PUBLIC_SITE)}" target="_blank" rel="noopener">${icon('globe')} View ${esc(host(PUBLIC_SITE))}</a>` : ''}
+            <div class="user-chip">${icon('users')}<span>${esc(state.me.operator ? 'City Hall OS support' : state.me.user.name)}<small>${esc(roleLabel(c.role))}</small></span></div>
             <button id="signOut" type="button">${icon('logout')} Sign out</button>
           </div>
         </aside>
@@ -193,12 +288,18 @@
       <div class="scrim" id="scrim"></div>
       <aside class="drawer" id="drawer" aria-modal="true" role="dialog"></aside>`;
     $('#signOut').onclick = signOut;
+    $('#citySwitch')?.addEventListener('change', (e) => selectCity(state.me.cities.find((x) => x.slug === e.target.value)));
     $('#menuBtn').onclick = () => $('#side').classList.toggle('open');
     $('#scrim').onclick = closeDrawer;
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
     window.onhashchange = route;
     route();
     refreshBadges();
+  }
+
+  function navGroup(label, items) {
+    const links = items.map((it) => (Array.isArray(it) ? it : [it])).filter(([key]) => can(ROUTES[key].perm)).map(([key, badge]) => navLink(key, badge));
+    return links.length ? `${label ? `<div class="nav-label">${label}</div>` : ''}${links.join('')}` : '';
   }
 
   function navLink(key, badgeId) {
@@ -218,14 +319,17 @@
   }
 
   function route() {
-    const key = (location.hash.match(/^#\/(\w+)/) || [])[1] || 'overview';
-    const r = ROUTES[key] || ROUTES.overview;
+    if (/^#\/setup\//.test(location.hash)) { boot(); return; }
+    let key = (location.hash.match(/^#\/(\w+)/) || [])[1] || 'overview';
+    if (!ROUTES[key] || !can(ROUTES[key].perm)) key = 'overview';
+    const r = ROUTES[key];
     $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === key));
     $('#side').classList.remove('open');
     $('#pageTitle').textContent = r.title;
-    $('#pageSub').textContent = r.sub;
+    $('#pageSub').textContent = typeof r.sub === 'function' ? r.sub() : r.sub;
     $('#pageActions').innerHTML = '';
     closeDrawer();
+    $$('.modal').forEach((m) => m.remove());
     const page = $('#page');
     page.innerHTML = '<div class="empty"><div class="spin" style="margin:30px auto"></div></div>';
     r.render(page).catch((e) => { page.innerHTML = `<div class="card empty">${icon('alert')}<div>${esc(e.message)}</div></div>`; });
@@ -256,23 +360,24 @@
     const k = o.knowledge;
     const days = [];
     for (let i = 13; i >= 0; i--) {
-      const d = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
+      const t = new Date(Date.now() - i * 864e5);
+      const d = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
       days.push({ d, n: (o.byDay.find((x) => x.day === d) || {}).n || 0 });
     }
     const maxDay = Math.max(1, ...days.map((x) => x.n));
     const maxCat = Math.max(1, ...k.categories.map((c) => c.n));
     const hour = new Date().getHours();
-    $('#pageActions').innerHTML = `<a class="btn" href="${PUBLIC_SITE}" target="_blank" rel="noopener">${icon('external')} Public site</a>`;
+    if (PUBLIC_SITE) $('#pageActions').innerHTML = `<a class="btn" href="${esc(PUBLIC_SITE)}" target="_blank" rel="noopener">${icon('external')} Public site</a>`;
     page.innerHTML = `
       <section class="welcome">
         <div>
-          <h2>Good ${hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'}, Wiggins</h2>
+          <h2>Good ${hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'}, ${esc(state.me.operator ? state.city.shortName : state.me.user.name.split(' ')[0])}</h2>
           <p>Your AI City Clerk answers residents around the clock from ${fmt(k.n)} city documents.</p>
-          <div class="live"><span class="live-dot"></span> Live on wiggins.cityhallos.com</div>
+          ${PUBLIC_SITE ? `<div class="live"><span class="live-dot"></span> Live on ${esc(host(PUBLIC_SITE))}</div>` : ''}
         </div>
         <div class="actions">
-          <a class="btn btn-primary" href="#/knowledge">${icon('upload')} Add documents</a>
-          <a class="btn" href="#/assistant">${icon('spark')} Test the assistant</a>
+          ${can('knowledge.edit') ? `<a class="btn btn-primary" href="#/knowledge">${icon('upload')} Add documents</a>` : ''}
+          ${can('assistant.test') ? `<a class="btn" href="#/assistant">${icon('spark')} Test the assistant</a>` : ''}
         </div>
       </section>
       <div class="kpis">
@@ -323,8 +428,9 @@
 
   async function renderKnowledge(page) {
     const upload = { category: 'auto', visibility: 'public', as_of: '' };
+    const editable = can('knowledge.edit');
     page.innerHTML = `
-      <section class="drop" id="drop">
+      <section class="drop" id="drop" ${editable ? '' : 'hidden'}>
         <div class="drop-icon">${icon('upload')}</div>
         <div>
           <h2>Drop documents to teach your AI City Clerk</h2>
@@ -354,6 +460,10 @@
         <thead><tr><th>Document</th><th class="hide-sm">Category</th><th class="hide-sm">Status of source</th><th class="hide-sm">Date</th><th class="num">Passages</th><th>Status</th></tr></thead>
         <tbody id="docRows"></tbody></table></div>`;
 
+    $('#docSearch').oninput = (e) => { state.q = e.target.value; drawDocs(); };
+    $('#catChips').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; state.cat = c.dataset.cat; drawDocs(); };
+    $('#docRows').onclick = (e) => { const tr = e.target.closest('tr[data-id]'); if (tr) openDocument(tr.dataset.id); };
+    if (!editable) { await loadDocs(); return; }
     const drop = $('#drop');
     ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
     ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
@@ -371,9 +481,6 @@
     };
     $('#addUrl').onclick = () => addUrlModal(upload);
     $('#addNote').onclick = () => noteModal({});
-    $('#docSearch').oninput = (e) => { state.q = e.target.value; drawDocs(); };
-    $('#catChips').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; state.cat = c.dataset.cat; drawDocs(); };
-    $('#docRows').onclick = (e) => { const tr = e.target.closest('tr[data-id]'); if (tr) openDocument(tr.dataset.id); };
     await loadDocs();
   }
 
@@ -498,7 +605,7 @@
     const m = modal(`
       <h2>Add a web page or online PDF</h2>
       <p class="muted" style="margin:0">City Hall OS fetches the page, reads it and adds it to the knowledge base. Link to the original stays attached to every answer.</p>
-      <label class="field"><span>URL</span><input class="input" id="mUrl" type="url" placeholder="https://www.cityofwiggins.gov/..." required></label>
+      <label class="field"><span>URL</span><input class="input" id="mUrl" type="url" placeholder="https://" required></label>
       <label class="field"><span>Title (optional)</span><input class="input" id="mTitle"></label>
       <div class="row"><button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="mGo">${icon('link')} Add page</button></div>`);
     m.querySelector('#mGo').onclick = async () => {
@@ -537,7 +644,7 @@
         const today = new Date().toISOString().slice(0, 10);
         try {
           await api('/documents', { method: 'POST', body: { title: q, text: `# ${q}\n\n${a}`, category: m.querySelector('#nCat').value, visibility: m.querySelector('#nVis').value, authority: 'staff-note', as_of: today } });
-          if (convoId) await api(`/conversations/${convoId}`, { method: 'PATCH', body: { status: 'reviewed' } });
+          if (convoId && can('conversations.review')) await api(`/conversations/${convoId}`, { method: 'PATCH', body: { status: 'reviewed' } });
           m.remove(); toast('Saved. The AI will use this answer from now on.');
           if ($('#docRows')) loadDocs();
           refreshBadges();
@@ -579,14 +686,20 @@
         <div class="passages">${chunks.slice(0, 40).map((c) => `<div class="passage">${c.heading ? `<b>${esc(c.heading)}</b>` : ''}${esc(c.text)}</div>`).join('') || '<div class="muted">No passages yet.</div>'}${chunks.length > 40 ? `<div class="muted">…and ${chunks.length - 40} more</div>` : ''}</div>
       </div>
       <div class="drawer-f">
-        <button class="btn btn-danger" id="dDel">${icon('trash')} Delete</button>
-        ${doc.file_name ? `<button class="btn" id="dReidx">${icon('refresh')} Re-index</button>` : ''}
+        ${can('knowledge.edit') ? `<button class="btn btn-danger" id="dDel">${icon('trash')} Delete</button>` : ''}
+        ${doc.file_name && can('knowledge.edit') ? `<button class="btn" id="dReidx">${icon('refresh')} Re-index</button>` : ''}
         <div class="right">
           ${doc.source_url ? `<a class="btn" href="${esc(doc.source_url)}" target="_blank" rel="noopener">${icon('external')} Original</a>` : doc.file_name ? `<button class="btn" id="dFile">${icon('external')} Open file</button>` : ''}
-          <button class="btn btn-primary" id="dSave">Save changes</button>
+          ${can('knowledge.edit') ? '<button class="btn btn-primary" id="dSave">Save changes</button>' : ''}
         </div>
       </div>`;
     d.querySelector('.close').onclick = closeDrawer;
+    d.querySelector('#dFile')?.addEventListener('click', async () => {
+      const res = await fetch(fileUrl);
+      if (!res.ok) { toast('Could not open file'); return; }
+      window.open(URL.createObjectURL(await res.blob()), '_blank');
+    });
+    if (!can('knowledge.edit')) { $$('input, select, textarea', d).forEach((el) => { el.disabled = true; }); return; }
     d.querySelector('#dSave').onclick = async () => {
       const body = { title: $('#dTitle').value, category: $('#dCat').value, visibility: $('#dVis').value, as_of: $('#dAsOf').value, authority: $('#dAuth').value, verification: $('#dVer').value, source_url: $('#dUrl').value, notes: $('#dNotes').value };
       const text = $('#dText').value.trim();
@@ -602,11 +715,6 @@
     d.querySelector('#dReidx')?.addEventListener('click', async (e) => {
       e.target.closest('button').disabled = true;
       try { const r = await api(`/documents/${id}/reprocess`, { method: 'POST' }); toast(r.document.status === 'ready' ? 'Re-indexed' : r.document.error); openDocument(id); loadDocs(); } catch (err) { toast(err.message); }
-    });
-    d.querySelector('#dFile')?.addEventListener('click', async () => {
-      const res = await fetch(fileUrl, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) { toast('Could not open file'); return; }
-      window.open(URL.createObjectURL(await res.blob()), '_blank');
     });
   }
 
@@ -697,7 +805,7 @@
       <div class="convo-item ${c.id === state.convoId ? 'on' : ''}" data-id="${c.id}">
         <div class="q">${esc(c.first_question || 'Conversation')}</div>
         <div class="meta">${pill(CONVO_STATUS, c.status)}<span>${c.messages / 2 | 0} ${c.messages === 2 ? 'question' : 'questions'}</span><span>·</span><span>${ago(c.last_at)}</span>${c.channel !== 'web' ? `<span class="pill">${esc(c.channel)}</span>` : ''}</div>
-      </div>`).join('') : emptyNote('chat', 'No conversations here yet. Try the chatbot on wiggins.cityhallos.com.');
+      </div>`).join('') : emptyNote('chat', `No conversations here yet.${PUBLIC_SITE ? ` Try the chatbot on ${esc(host(PUBLIC_SITE))}.` : ''}`);
     $('#cList').onclick = (e) => { const it = e.target.closest('.convo-item'); if (!it) return; state.convoId = it.dataset.id; $$('.convo-item').forEach((x) => x.classList.toggle('on', x === it)); showConvo(it.dataset.id); };
     if (state.convoId) showConvo(state.convoId).catch(() => {});
   }
@@ -709,8 +817,8 @@
       <div class="card-h" style="flex-wrap:wrap"><h2>Conversation</h2>${pill(CONVO_STATUS, c.status)}
         <span class="faint" style="font-size:12.5px">Started ${ago(c.started_at)}${c.page_url ? ` on <a href="${esc(c.page_url)}" target="_blank" rel="noopener">${esc(new URL(c.page_url, location.href).pathname)}</a>` : ''}</span>
         <div style="margin-left:auto;display:flex;gap:8px">
-          <button class="btn btn-sm" id="cTeach">${icon('pen')} Answer &amp; teach the AI</button>
-          ${c.status !== 'reviewed' ? `<button class="btn btn-sm btn-dark" id="cDone">${icon('check')} Mark reviewed</button>` : ''}
+          ${can('knowledge.edit') ? `<button class="btn btn-sm" id="cTeach">${icon('pen')} Answer &amp; teach the AI</button>` : ''}
+          ${c.status !== 'reviewed' && can('conversations.review') ? `<button class="btn btn-sm btn-dark" id="cDone">${icon('check')} Mark reviewed</button>` : ''}
         </div></div>
       ${requests.length ? `<div class="card-b" style="padding-bottom:0">${requests.map((r) => `<span class="pill blue">${icon('clipboard')} ${esc(r.ref)} · ${esc(r.category)} · ${esc((REQ_STATUS[r.status] || [r.status])[0])}</span>`).join(' ')}</div>` : ''}
       <div class="chat-log">${messages.map((m) => m.role === 'user' ? `<div class="msg user">${esc(m.content)}</div>` : `
@@ -721,26 +829,29 @@
     view.querySelector('#cDone')?.addEventListener('click', async () => {
       await api(`/conversations/${id}`, { method: 'PATCH', body: { status: 'reviewed' } }); toast('Marked reviewed'); refreshBadges(); renderConversations($('#page'));
     });
-    view.querySelector('#cTeach').onclick = async () => {
+    view.querySelector('#cTeach')?.addEventListener('click', async () => {
       const lastQ = [...messages].reverse().find((m) => m.role === 'user');
       if (await noteModal({ question: lastQ?.content || c.first_question, convoId: id })) renderConversations($('#page'));
-    };
+    });
   }
 
   /* ---------------- Service requests ---------------- */
 
   async function renderRequests(page) {
-    const [{ requests }, settings] = await Promise.all([api('/requests'), state.staff ? null : api('/settings')]);
-    if (settings) state.staff = settings.staff || [];
-    $('#pageActions').innerHTML = `<button class="btn btn-primary" id="rNew">${icon('plus')} Log a request</button>`;
-    $('#rNew').onclick = newRequestModal;
+    const [{ requests }, staff, depts] = await Promise.all([api('/requests'), state.staff ? null : api('/staff'), state.departments ? null : api('/departments')]);
+    if (staff) state.staff = staff.staff.filter((p) => p.active);
+    if (depts) state.departments = depts.departments.filter((d) => d.active);
+    if (can('requests.create')) {
+      $('#pageActions').innerHTML = `<button class="btn btn-primary" id="rNew">${icon('plus')} Log a request</button>`;
+      $('#rNew').onclick = newRequestModal;
+    }
     const lanes = [['new', 'New'], ['needs_info', 'Needs information'], ['assigned', 'Assigned'], ['in_progress', 'In progress'], ['awaiting_review', 'Awaiting review'], ['resolved', 'Resolved']];
     page.innerHTML = `<div class="board">${lanes.map(([key, label]) => {
       const items = requests.filter((r) => (key === 'resolved' ? ['resolved', 'closed'].includes(r.status) : r.status === key));
       return `<div class="lane"><div class="lane-h">${pill(REQ_STATUS, key)}<span class="count">${items.length}</span></div>
         <div class="lane-cards">${items.map((r) => `
           <div class="rcard" data-id="${r.id}">
-            <div class="top"><span class="ref">${esc(r.ref)}</span>${r.priority !== 'normal' ? `<span class="pill ${r.priority === 'low' ? '' : 'red'}">${esc(r.priority)}</span>` : ''}${r.photo ? `<span class="pill">Photo</span>` : ''}${r.sample ? '<span class="pill">Sample</span>' : ''}${r.convo_id ? '<span class="pill blue">AI intake</span>' : ''}</div>
+            <div class="top"><span class="ref">${esc(r.ref)}</span>${r.priority !== 'normal' ? `<span class="pill ${r.priority === 'low' ? '' : 'red'}">${esc(r.priority)}</span>` : ''}${r.photo ? `<span class="pill">Photo</span>` : ''}${r.source === 'chat' ? '<span class="pill blue">AI intake</span>' : r.source === 'staff' ? '<span class="pill">Logged by staff</span>' : ''}</div>
             <strong>${esc(r.category)}</strong>
             ${r.location ? `<p>${esc(r.location)}</p>` : ''}
             <div class="foot"><span>${esc(r.department)}</span><span>·</span><span>${ago(r.created_at)}</span>${r.assignee ? `<span>· ${esc(r.assignee)}</span>` : ''}</div>
@@ -751,6 +862,8 @@
   }
 
   function openRequest(r) {
+    const edit = can('requests.edit');
+    const mapQ = r.latitude != null ? `${r.latitude},${r.longitude}` : `${r.location}${(r.location || '').toLowerCase().includes(state.city.shortName.toLowerCase()) ? '' : `, ${state.city.shortName}, ${state.city.state}`}`;
     const d = openDrawer(`
       <div class="drawer-h"><div><div class="section-title mono">${esc(r.ref)}</div><h2>${esc(r.category)}</h2>
         <div style="display:flex;gap:6px;margin-top:8px">${pill(REQ_STATUS, r.status)}<span class="pill">${esc(r.department)}</span><span class="pill">Reported ${ago(r.created_at)}</span></div></div>
@@ -758,33 +871,37 @@
       <div class="drawer-b">
         ${r.summary ? `<div class="card card-b" style="background:var(--blue-soft);border-color:var(--blue-line)"><div class="section-title">Summary</div><p style="margin:6px 0 0">${esc(r.summary)}</p></div>` : ''}
         <div class="card card-b"><div class="section-title">Resident's description</div><p style="margin:6px 0 0;white-space:pre-wrap">${esc(r.description)}</p>
-          ${r.location ? `<p style="margin:10px 0 0"><b>Location:</b> ${esc(r.location)} · <a href="https://www.google.com/maps/search/${encodeURIComponent(r.location + (/wiggins/i.test(r.location) ? '' : ', Wiggins, MS'))}" target="_blank" rel="noopener">Map</a></p>` : ''}
+          ${r.location ? `<p style="margin:10px 0 0"><b>Location:</b> ${esc(r.location)} · <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQ)}" target="_blank" rel="noopener">Map</a></p>` : ''}
           ${r.name || r.contact ? `<p style="margin:6px 0 0"><b>Contact:</b> ${esc([r.name, r.contact].filter(Boolean).join(' · '))}</p>` : ''}
           ${r.convo_id ? `<p style="margin:6px 0 0"><a href="#/conversations" data-convo="${esc(r.convo_id)}">View the chat conversation</a></p>` : ''}</div>
         ${r.photo ? '<img class="photo" id="rPhoto" alt="Photo from resident">' : ''}
-        <div class="field"><span>Move to</span><div class="status-steps">${Object.entries(REQ_STATUS).map(([k, [l]]) => `<button class="btn btn-sm ${k === r.status ? 'btn-dark' : ''}" data-status="${k}">${l}</button>`).join('')}</div></div>
+        ${edit ? `<div class="field"><span>Move to</span><div class="status-steps">${Object.entries(REQ_STATUS).map(([k, [l]]) => `<button class="btn btn-sm ${k === r.status ? 'btn-dark' : ''}" data-status="${k}">${l}</button>`).join('')}</div></div>
         <div class="grid-2">
-          <label class="field"><span>Assigned to</span><select class="select" id="rAssignee"><option value="">Unassigned</option>${(state.staff || []).map((p) => `<option value="${esc(p.name)}" ${p.name === r.assignee ? 'selected' : ''}>${esc(p.name)} · ${esc(p.department)}</option>`).join('')}${r.assignee && !(state.staff || []).some((p) => p.name === r.assignee) ? `<option selected>${esc(r.assignee)}</option>` : ''}</select></label>
+          <label class="field"><span>Assigned to</span><select class="select" id="rAssignee"><option value="">Unassigned</option>${(state.staff || []).map((p) => `<option value="${esc(p.id)}" ${p.id === r.assignee_id ? 'selected' : ''}>${esc(p.name)}${p.department ? ` · ${esc(p.department)}` : ''}</option>`).join('')}</select></label>
           <label class="field"><span>Priority</span><select class="select" id="rPriority">${['low', 'normal', 'high', 'urgent'].map((p) => `<option ${p === r.priority ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
+          <label class="field"><span>Department</span><select class="select" id="rDept">${(state.departments || []).map((x) => `<option value="${esc(x.id)}" ${x.id === r.department_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
         </div>
-        <label class="field"><span>Add a note</span><textarea class="textarea" id="rNote" rows="2" placeholder="Visible to staff in the history"></textarea></label>
+        ${state.staff && !state.staff.length ? '<small class="faint">Add people under Staff &amp; access to assign requests.</small>' : ''}
+        <label class="field"><span>Add a note</span><textarea class="textarea" id="rNote" rows="2" placeholder="Internal: visible to staff only"></textarea><small>Residents tracking ${esc(r.ref)} see status changes, not notes.</small></label>` : `<div class="grid-2"><div class="field"><span>Assigned to</span><b>${esc(r.assignee || 'Unassigned')}</b></div><div class="field"><span>Priority</span><b>${esc(r.priority)}</b></div></div>`}
         <div class="section-title">History</div>
-        <div class="timeline">${r.history.slice().reverse().map((h) => `<div class="tl"><i></i><div><b>${esc(h.note || (REQ_STATUS[h.status] || [h.status])[0])}</b><small>${esc(h.by)} · ${new Date(h.at).toLocaleString()}</small></div></div>`).join('')}</div>
+        <div class="timeline">${r.history.slice().reverse().map((h) => `<div class="tl"><i></i><div><b>${esc(h.note || (REQ_STATUS[h.status] || [h.status])[0])}</b><small>${esc(h.by)} · ${toDate(h.at).toLocaleString()}${h.public ? ' · shown to resident' : ''}</small></div></div>`).join('')}</div>
       </div>
-      <div class="drawer-f"><div class="right"><button class="btn btn-primary" id="rSave">Save</button></div></div>`);
+      ${edit ? '<div class="drawer-f"><div class="right"><button class="btn btn-primary" id="rSave">Save</button></div></div>' : ''}`);
     let status = r.status;
+    d.querySelector('[data-convo]')?.addEventListener('click', (e) => { state.convoId = e.target.dataset.convo; });
+    if (r.photo) {
+      fetch(`${API}/requests/${r.id}/photo`).then((res) => res.blob()).then((b) => { $('#rPhoto').src = URL.createObjectURL(b); });
+    }
+    if (!edit) return;
     d.querySelector('.status-steps').onclick = (e) => {
       const b = e.target.closest('[data-status]'); if (!b) return;
       status = b.dataset.status; $$('[data-status]', d).forEach((x) => x.classList.toggle('btn-dark', x === b));
     };
-    d.querySelector('[data-convo]')?.addEventListener('click', (e) => { state.convoId = e.target.dataset.convo; });
-    if (r.photo) {
-      fetch(`${API}/requests/${r.id}/photo`, { headers: { Authorization: `Bearer ${token}` } }).then((res) => res.blob()).then((b) => { $('#rPhoto').src = URL.createObjectURL(b); });
-    }
     d.querySelector('#rSave').onclick = async () => {
       try {
-        const { request } = await api(`/requests/${r.id}`, { method: 'PATCH', body: { status, assignee: $('#rAssignee').value, priority: $('#rPriority').value, note: $('#rNote').value } });
-        toast(`${request.ref} updated`); refreshBadges(); await renderRequests($('#page')); openRequest(request);
+        const { request } = await api(`/requests/${r.id}`, { method: 'PATCH', body: { status, assignee_id: $('#rAssignee').value || null, priority: $('#rPriority').value, department_id: $('#rDept').value, note: $('#rNote').value } });
+        toast(`${request.ref} updated`); refreshBadges(); await renderRequests($('#page'));
+        if (!state.city.department_id || request.department_id === state.city.department_id) openRequest(request);
       } catch (e) { toast(e.message); }
     };
   }
@@ -821,7 +938,7 @@
             <p>Paste this one line before <code>&lt;/body&gt;</code> on any website: CivicPlus, Granicus, WordPress, Wix or a custom site. The chat bubble appears in the corner and answers from this knowledge base.</p>
             <div class="code" style="margin-top:12px"><button class="btn btn-sm copy" id="copySnippet">${icon('copy')} Copy</button>${esc(snippet)}</div>
             <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-              <a class="btn" href="${PUBLIC_SITE}" target="_blank" rel="noopener">${icon('external')} See it on wiggins.cityhallos.com</a>
+              ${PUBLIC_SITE ? `<a class="btn" href="${esc(PUBLIC_SITE)}" target="_blank" rel="noopener">${icon('external')} See it on ${esc(host(PUBLIC_SITE))}</a>` : ''}
               <button class="btn" id="previewHere">${icon('spark')} Preview it on this page</button>
             </div></div>
           <span></span></div></div>
@@ -845,7 +962,7 @@
             <div class="code" style="margin-top:12px">GET  /api/${CITY}/config            public assistant settings
 POST /api/${CITY}/chat              ask the AI City Clerk (streams answers with citations)
 POST /api/${CITY}/requests          file a service request
-GET  /api/${CITY}/track/WIG-1001    check a request's status
+GET  /api/${CITY}/track/${esc(state.city.requestPrefix)}-1001    check a request's status
 GET  /api/${CITY}/documents         staff: list the knowledge base
 POST /api/${CITY}/documents         staff: add files, web pages or answers</div></div><span></span></div></div>
       </div>`;
@@ -867,6 +984,7 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
         <div class="card"><div class="card-h"><h2>AI City Clerk</h2></div><div class="card-b stack" style="gap:14px">
           <div class="grid-2">
             <label class="field"><span>Assistant name</span><input class="input" name="assistantName" value="${esc(s.assistantName)}"></label>
+            <label class="field"><span>Short city name</span><input class="input" name="shortName" value="${esc(s.shortName)}"><small>Used in replies, e.g. "${esc(s.shortName)} Police".</small></label>
             <label class="field"><span>Brand color</span><div style="display:flex;gap:8px"><input type="color" name="brandColor" value="${esc(s.brandColor)}" style="width:46px;height:38px;border:1px solid var(--line-2);border-radius:10px;padding:3px;background:#fff"><input class="input" id="colorText" value="${esc(s.brandColor)}"></div></label>
           </div>
           <label class="field"><span>Subtitle</span><input class="input" name="tagline" value="${esc(s.tagline)}"></label>
@@ -884,6 +1002,7 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
             <label class="field"><span>Office hours</span><input class="input" name="hours" value="${esc(s.hours)}" placeholder="e.g. Monday–Friday, 8 am to 5 pm"></label>
             <label class="field"><span>City website</span><input class="input" name="website" value="${esc(s.website)}"></label>
           </div>
+          <label class="field"><span>Site where the chat is installed</span><input class="input" name="publicSite" value="${esc(s.publicSite || '')}" placeholder="https://"></label>
           <label class="field"><span>Other current facts</span><textarea class="textarea" name="profileNotes" rows="4" placeholder="e.g. The Board of Aldermen meets the first and third Tuesday of each month at 6 pm at City Hall.">${esc(s.profileNotes || '')}</textarea></label>
         </div></div>
         <div><button class="btn btn-primary" type="submit">${icon('check')} Save settings</button></div>
@@ -895,13 +1014,131 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
       e.preventDefault();
       const body = Object.fromEntries(new FormData(f).entries());
       body.suggestions = body.suggestions.split('\n').map((x) => x.trim()).filter(Boolean);
-      try { await api('/settings', { method: 'PUT', body }); toast('Settings saved. The chatbot updates within a minute.'); } catch (err) { toast(err.message); }
+      try {
+        const saved = await api('/settings', { method: 'PUT', body });
+        Object.assign(state.city, { shortName: saved.shortName, publicSite: saved.publicSite, brandColor: saved.brandColor });
+        PUBLIC_SITE = saved.publicSite || '';
+        toast('Settings saved. The chatbot updates within a minute.');
+      } catch (err) { toast(err.message); }
     };
   }
 
-  if (token) {
-    fetch('/api/auth/check', { headers: { Authorization: `Bearer ${token}` } }).then((r) => (r.ok ? renderShell() : signOut())).catch(() => renderShell());
-  } else {
-    renderLogin();
+  /* ---------------- Staff & access ---------------- */
+
+  const roleName = (key) => (state.roles || state.me.roles).find((r) => r.key === key)?.label || key;
+
+  async function renderStaff(page) {
+    const [{ staff, roles }, { departments }] = await Promise.all([api('/staff'), api('/departments')]);
+    state.staff = null; // the assignment list reloads with any changes
+    state.roles = roles;
+    state.departments = departments.filter((d) => d.active);
+    $('#pageActions').innerHTML = `<button class="btn btn-primary" id="sNew">${icon('plus')} Add a person</button>`;
+    $('#sNew').onclick = () => staffModal();
+    const accessPill = (p) => (!p.access ? '<span class="pill">No dashboard access</span>'
+      : `<span class="pill ${p.access.role === 'admin' ? 'violet' : 'blue'}">${esc(roleName(p.access.role))}</span>${p.access.status === 'invited' ? ' <span class="pill amber">Invited</span>' : ''}`);
+    page.innerHTML = `
+      <div class="cols cols-21">
+        <div class="card" style="overflow:hidden"><table class="table">
+          <thead><tr><th>Person</th><th class="hide-sm">Department</th><th>Dashboard access</th><th class="hide-sm">Last sign-in</th></tr></thead>
+          <tbody id="sRows">${staff.length ? staff.map((p) => `<tr data-id="${p.id}" ${p.active ? '' : 'style="opacity:.55"'}>
+            <td><strong>${esc(p.name)}</strong><div class="faint" style="font-size:12.5px">${esc([p.title, p.access?.email || p.email].filter(Boolean).join(' · '))}</div></td>
+            <td class="hide-sm">${esc(p.department || '—')}</td>
+            <td>${p.active ? accessPill(p) : '<span class="pill">Inactive</span>'}</td>
+            <td class="hide-sm muted">${p.access?.last_login_at ? ago(p.access.last_login_at) : '—'}</td></tr>`).join('')
+            : `<tr><td colspan="4">${emptyNote('users', 'Add the people who work requests or manage the knowledge base.')}</td></tr>`}</tbody></table></div>
+        <div class="card"><div class="card-h"><h2>Roles</h2></div><div class="card-b"><div class="list">${roles.map((r) => `
+          <div class="list-item"><div class="grow"><div class="title">${esc(r.label)}</div><div class="meta">${esc(r.description)}</div></div></div>`).join('')}</div>
+          <p class="faint" style="font-size:12.5px;margin:12px 0 0">People without dashboard access can still be assigned requests. Every change anyone makes is recorded under Activity.</p></div></div>
+      </div>`;
+    $('#sRows').onclick = (e) => { const tr = e.target.closest('tr[data-id]'); if (tr) staffModal(staff.find((p) => p.id === tr.dataset.id)); };
   }
+
+  function staffModal(p = null) {
+    const roles = state.roles || state.me.roles;
+    const isSelf = !!(p && state.me.user && p.user_id === state.me.user.id);
+    const m = modal(`
+      <h2>${p ? esc(p.name) : 'Add a person'}</h2>
+      <div class="grid-2">
+        <label class="field"><span>Name</span><input class="input" id="pName" value="${esc(p?.name || '')}" required></label>
+        <label class="field"><span>Job title</span><input class="input" id="pTitle" value="${esc(p?.title || '')}" placeholder="e.g. Street crew lead"></label>
+        <label class="field"><span>Department</span><select class="select" id="pDept"><option value="">None</option>${state.departments.map((d) => `<option value="${esc(d.id)}" ${d.id === p?.department_id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
+        <label class="field"><span>Email</span><input class="input" id="pEmail" type="email" value="${esc(p?.access?.email || p?.email || '')}" ${p?.access ? 'disabled' : ''}></label>
+        <label class="field"><span>Phone</span><input class="input" id="pPhone" value="${esc(p?.phone || '')}"></label>
+        <label class="field"><span>Dashboard access</span><select class="select" id="pRole" ${isSelf ? 'disabled' : ''}><option value="">No dashboard access</option>${roles.map((r) => `<option value="${r.key}" ${r.key === p?.access?.role ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}</select></label>
+      </div>
+      <small class="faint" id="pRoleHelp"></small>
+      ${isSelf ? "<small class=\"faint\">You can't change your own access. Ask another administrator.</small>" : ''}
+      <div class="row">
+        ${p && p.active && !isSelf ? '<button class="btn btn-danger" id="pDeactivate" style="margin-right:auto">Mark inactive</button>' : ''}
+        ${p && !p.active ? '<button class="btn" id="pReactivate" style="margin-right:auto">Reactivate</button>' : ''}
+        ${p?.access ? `<button class="btn" id="pLink">${icon('link')} New password link</button>` : ''}
+        <button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="pSave">${p ? 'Save' : 'Add person'}</button>
+      </div>`);
+    const help = () => {
+      const r = roles.find((x) => x.key === m.querySelector('#pRole').value);
+      m.querySelector('#pRoleHelp').textContent = r ? `${r.label}: ${r.description}.` : "They can be assigned requests but can't sign in.";
+    };
+    m.querySelector('#pRole').onchange = help;
+    help();
+    const done = (res, msg) => {
+      m.remove();
+      toast(msg);
+      if (res.setupUrl) setupLinkModal(res.staff?.name || p?.name, res.setupUrl);
+      renderStaff($('#page'));
+    };
+    m.querySelector('#pSave').onclick = async () => {
+      const body = { name: m.querySelector('#pName').value, title: m.querySelector('#pTitle').value, department_id: m.querySelector('#pDept').value, phone: m.querySelector('#pPhone').value };
+      if (!p?.access) body.email = m.querySelector('#pEmail').value;
+      if (!isSelf) body.role = m.querySelector('#pRole').value;
+      if (!body.name.trim()) { m.querySelector('#pName').focus(); return; }
+      try {
+        const res = p ? await api(`/staff/${p.id}`, { method: 'PATCH', body }) : await api('/staff', { method: 'POST', body });
+        done(res, p ? 'Saved' : `${body.name} added`);
+      } catch (e) { toast(e.message); }
+    };
+    m.querySelector('#pDeactivate')?.addEventListener('click', async () => {
+      try { done(await api(`/staff/${p.id}`, { method: 'PATCH', body: { active: false } }), `${p.name} marked inactive`); } catch (e) { toast(e.message); }
+    });
+    m.querySelector('#pReactivate')?.addEventListener('click', async () => {
+      try { done(await api(`/staff/${p.id}`, { method: 'PATCH', body: { active: true } }), `${p.name} reactivated`); } catch (e) { toast(e.message); }
+    });
+    m.querySelector('#pLink')?.addEventListener('click', async () => {
+      try { const r = await api(`/staff/${p.id}/setup-link`, { method: 'POST' }); m.remove(); setupLinkModal(p.name, r.setupUrl); } catch (e) { toast(e.message); }
+    });
+  }
+
+  function setupLinkModal(name, link) {
+    const m = modal(`
+      <h2>Send ${esc(name)} their setup link</h2>
+      <p class="muted" style="margin:0">They open it to choose a password. It works once and expires in 7 days. Anyone with the link can set the password, so send it only to them.</p>
+      <div class="code" style="white-space:pre-wrap;word-break:break-all;padding-right:84px"><button class="btn btn-sm copy" id="copyLink">${icon('copy')} Copy</button>${esc(link)}</div>
+      <div class="row"><button class="btn btn-primary" data-close>Done</button></div>`);
+    m.querySelector('#copyLink').onclick = async () => { try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch { toast('Select the link and copy it'); } };
+  }
+
+  /* ---------------- Activity (audit log) ---------------- */
+
+  const AUDIT_TYPES = [['', 'All'], ['document', 'Knowledge base'], ['request', 'Requests'], ['staff', 'Staff & access'], ['conversation', 'Conversations'], ['settings', 'Settings'], ['city', 'City']];
+
+  async function renderActivity(page, append = false) {
+    state.auditType ??= '';
+    const before = append ? state.auditEvents.at(-1)?.id : null;
+    const qs = new URLSearchParams({ ...(state.auditType ? { type: state.auditType } : {}), ...(before ? { before } : {}) });
+    const { events } = await api(`/audit?${qs}`);
+    state.auditEvents = append ? [...state.auditEvents, ...events] : events;
+    const actorPill = (e) => ({ resident: '<span class="pill">Resident</span>', ai: '<span class="pill violet">AI</span>', operator: '<span class="pill violet">Support</span>', system: '<span class="pill">System</span>' }[e.actor_type] || '');
+    const changes = (c) => (c ? `<div class="faint" style="font-size:12.5px;margin-top:4px">${Object.entries(c).map(([k, [a, b]]) => `${esc(k.replace(/_/g, ' '))}: ${esc(typeof a === 'object' && a ? JSON.stringify(a) : a ?? '—')} → ${esc(typeof b === 'object' && b ? JSON.stringify(b) : b ?? '—')}`).join(' · ')}</div>` : '');
+    page.innerHTML = `
+      <div class="toolbar" style="margin-top:0"><div class="chips" id="aTypes">${AUDIT_TYPES.map(([v, l]) => `<button class="chip ${state.auditType === v ? 'on' : ''}" data-v="${v}">${l}</button>`).join('')}</div></div>
+      <div class="card"><div class="card-b"><div class="list">${state.auditEvents.length ? state.auditEvents.map((e) => `
+        <div class="list-item"><div class="grow"><div class="title">${esc(e.summary)}</div>
+          <div class="meta">${esc(e.actor_name)} ${actorPill(e)} · <span title="${esc(toDate(e.at).toLocaleString())}">${ago(e.at)}</span></div>${changes(e.changes)}</div></div>`).join('')
+        : emptyNote('refresh', 'Nothing recorded yet.')}</div>
+        ${events.length >= 100 ? '<div style="text-align:center;margin-top:12px"><button class="btn" id="aMore">Load older</button></div>' : ''}</div></div>`;
+    $('#aTypes').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; state.auditType = c.dataset.v; renderActivity(page); };
+    $('#aMore')?.addEventListener('click', () => renderActivity(page, true));
+  }
+
+  window.addEventListener('hashchange', () => { if (!state.me && /^#\/setup\//.test(location.hash)) boot(); });
+  boot();
 })();

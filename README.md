@@ -51,19 +51,20 @@ city and every channel shares. Data is scoped by city slug, so a new city is a n
 | `/embed.js` | The AI City Clerk chat. One line on any website: `<script src="https://app.cityhallos.com/embed.js" data-city="wiggins" async></script>` |
 | `/api/{city}/…` | Chat (streams cited answers), service requests and tracking, forms, knowledge base, conversations, settings |
 
-How it works:
+How it works (details in [`platform/ARCHITECTURE.md`](platform/ARCHITECTURE.md)):
 
-- **Storage.** D1 database `cityhallos` (schema in [`platform/schema.sql`](platform/schema.sql)) and R2 bucket `cityhallos-files` for original files.
+- **Storage.** The D1 database `cityhallos` ([`platform/schema.sql`](platform/schema.sql)) holds the city registry, staff accounts and roles. Each city's records live in that city's own SQLite database, a Durable Object ([`platform/src/store.js`](platform/src/store.js)). Original files go to the R2 bucket `cityhallos-files` under the city's id.
 - **Ingestion.** Uploaded files, web pages and staff-written answers become text. The dashboard reads PDFs in the browser, the Worker falls back to `unpdf` or Workers AI `toMarkdown`. Text is split into passages and indexed with SQLite FTS5.
 - **Answering.** Retrieval is BM25 search plus the `bge-reranker-base` reranker. Answers cite numbered sources, and each source carries a verification label (verified current, official but not confirmed current, historical, secondary, unverified). Unanswered questions are flagged for staff, emergencies go straight to 911 guidance, and reported problems start a guided intake that creates a tracked request.
 - **Model.** Workers AI Llama 3.3 70B by default. Set an Anthropic key and it answers with Claude instead:
   `cd platform && npx wrangler secret put ANTHROPIC_API_KEY`
-- **Staff access.** The dashboard uses one access code, the `ADMIN_KEY` Worker secret. For local development, put a test code in `platform/.dev.vars` (gitignored) and run `npx wrangler dev --remote` from `platform/`.
+- **Staff access.** Each staff member has their own account with a role (administrator, knowledge editor, department staff or viewer). Administrators add people under Staff & access and send them a one-time setup link. Every change is recorded in the city's audit log, shown under Activity. City Hall OS support signs in with the `ADMIN_KEY` Worker secret.
+- **Local development.** Put a test code in `platform/.dev.vars` (gitignored) and run `npx wrangler dev` from `platform/`. Durable Objects, D1 and R2 run locally; Workers AI always runs remotely.
 
 `wiggins.cityhallos.com` ([`workers/wiggins`](workers/wiggins)) serves the Wiggins site and adds the embed line to every
 page, the same way a city would add it to its own site. `/admin` redirects to the dashboard and `/ask` to the portal.
 
-Deploy with `npx wrangler deploy` from `platform/`. Schema changes: `npx wrangler d1 execute cityhallos --remote --file schema.sql`.
+Deploy with `npx wrangler deploy` from `platform/`. Platform database changes go in `platform/migrations/`; city store changes go in the `MIGRATIONS` list in `store.js` and apply themselves.
 
 ## Contact form
 

@@ -96,17 +96,3 @@ function splitLong(p) {
   if (cur) out.push(cur);
   return out;
 }
-
-// Replace a document's chunks in the search index.
-export async function indexDocument(env, doc, text) {
-  await env.DB.prepare('DELETE FROM chunks_fts WHERE doc_id = ?').bind(doc.id).run();
-  const chunks = chunkText(text);
-  const stmt = env.DB.prepare(
-    'INSERT INTO chunks_fts (title, heading, text, doc_id, city, visibility, ord) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (let i = 0; i < chunks.length; i += 50) {
-    await env.DB.batch(chunks.slice(i, i + 50).map((c, j) =>
-      stmt.bind(doc.title, c.heading, c.text, doc.id, doc.city, doc.visibility, i + j)));
-  }
-  return chunks.length;
-}
