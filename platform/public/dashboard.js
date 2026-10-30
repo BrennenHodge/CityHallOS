@@ -1130,15 +1130,17 @@
           <span></span></div></div>
         <div class="card card-b"><div class="channel">
           <div class="channel-icon" style="background:var(--violet-soft);color:var(--violet)">${icon('phone')}</div>
-          <div><h3>Phone and text messages ${phone.phone ? '<span class="pill green" style="margin-left:6px">Twilio connected</span>' : '<span class="pill amber" style="margin-left:6px">Needs a Twilio number</span>'}</h3>
+          <div><h3>Phone and text messages ${phone.texts ? `<span class="pill green" style="margin-left:6px">${phone.texts === 'telnyx' ? 'Telnyx' : 'Twilio'} connected</span>` : '<span class="pill amber" style="margin-left:6px">Needs a phone number</span>'}</h3>
             <p>Residents call or text a City Hall number. The AI answers from this knowledge base, takes problem reports with a tracking number, checks on requests by number, and hands callers to City Hall during office hours. Every call and text appears under Conversations.</p>
             <ol class="muted" style="margin:10px 0 0;padding-left:20px;font-size:13.5px">
-              <li>Buy a local number in Twilio (Phone Numbers → Buy a number).</li>
-              <li>On the number, set <b>A message comes in</b> to the first address below and <b>A call comes in</b> to the second, both as HTTP POST.</li>
-              <li>City Hall OS support adds the Twilio account keys to the platform once; every city's number then works.</li>
+              <li>Buy a local number in Telnyx (Numbers → Search &amp; Buy Numbers).</li>
+              <li>Create a messaging profile (Messaging → Programmable Messaging), set its inbound webhook to the address below with API v2, and assign the number to it.</li>
+              <li>Register the city for business texting (Messaging → 10DLC: a brand for the city and a campaign). Carriers block texts from unregistered numbers.</li>
+              <li>City Hall OS support adds the Telnyx keys to the platform once; every city's number then works.</li>
             </ol>
-            <div class="code" style="margin-top:12px">Messages: ${esc(phone.smsUrl)}
-Calls:    ${esc(phone.voiceUrl)}</div></div><span></span></div></div>
+            <div class="code" style="margin-top:12px">Texts: ${esc(phone.telnyxUrl)}${phone.texts === 'twilio' ? `
+Twilio messages: ${esc(phone.smsUrl)}
+Twilio calls:    ${esc(phone.voiceUrl)}` : ''}</div></div><span></span></div></div>
         <div class="cols cols-2">
           <div class="card card-b"><div class="channel" style="grid-template-columns:48px 1fr">
             <div class="channel-icon" style="background:var(--amber-soft);color:var(--amber)">${icon('mail')}</div>

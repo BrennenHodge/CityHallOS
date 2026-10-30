@@ -59,7 +59,7 @@ How it works (details in [`platform/ARCHITECTURE.md`](platform/ARCHITECTURE.md))
 - **Model.** Workers AI Llama 3.3 70B by default. Set an Anthropic key and it answers with Claude instead:
   `cd platform && npx wrangler secret put ANTHROPIC_API_KEY`
 - **Staff access.** Each staff member has their own account with a role (administrator, knowledge editor, department staff or viewer). Administrators add people under Staff & access and send them a one-time setup link. Every change is recorded in the city's audit log, shown under Activity. City Hall OS support signs in with the `ADMIN_KEY` Worker secret.
-- **Applications.** Residents fill out every city form in the chat instead of downloading a PDF: construction and sign permits, certificates of occupancy, permit exemptions, utility connection inspections, variances, conditional use, rezoning and utility site plans. The chat grows into a full-screen workspace (tabs on a phone), with the conversation on one side and the city's form on the other, filling in as they answer; residents can ask what anything means at any point. Each form is one definition in [`platform/src/permits/forms/`](platform/src/permits/forms/) run by one engine ([`engine.js`](platform/src/permits/engine.js)), which drives the questions, the form, the completeness checks, the fee estimate, the printable PDF and what City Hall issues (permit, certificate or approval letter). Construction permits still fill Wiggins' own fillable 2018 PDF. Answers autosave; a secret link (`/{city}/#permit=…`) reopens an application on any device, and `/{city}/#apply={kind}` starts one from the city's website. Residents can sign in with their phone number and a texted code to see every application under My applications. Addresses are screened automatically against U.S. Census city limits and FEMA flood zones. Before submission the AI reads the answers and uploaded documents like a staff reviewer and copies blank details printed on documents, such as the parcel number. Staff work the queue under **Applications**: mark complete and set the fee, record payment, record inspections, approve or issue, or send it back with an AI-drafted list of changes. Residents are told at each step by email, text or phone call (`RESEND_API_KEY` + `NOTIFY_FROM_EMAIL`, `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_FROM`); without those secrets messages are logged as not sent and phone sign-in is off. A daily cron reminds residents about unfinished drafts and requested changes. The AI never approves anything. A city's fees and options per form live in `settings.permits` (see [`platform/cities/wiggins.json`](platform/cities/wiggins.json)).
+- **Applications.** Residents fill out every city form in the chat instead of downloading a PDF: construction and sign permits, certificates of occupancy, permit exemptions, utility connection inspections, variances, conditional use, rezoning and utility site plans. The chat grows into a full-screen workspace (tabs on a phone), with the conversation on one side and the city's form on the other, filling in as they answer; residents can ask what anything means at any point. Each form is one definition in [`platform/src/permits/forms/`](platform/src/permits/forms/) run by one engine ([`engine.js`](platform/src/permits/engine.js)), which drives the questions, the form, the completeness checks, the fee estimate, the printable PDF and what City Hall issues (permit, certificate or approval letter). Construction permits still fill Wiggins' own fillable 2018 PDF. Answers autosave; a secret link (`/{city}/#permit=…`) reopens an application on any device, and `/{city}/#apply={kind}` starts one from the city's website. Residents can sign in with their phone number and a texted code to see every application under My applications. Addresses are screened automatically against U.S. Census city limits and FEMA flood zones. Before submission the AI reads the answers and uploaded documents like a staff reviewer and copies blank details printed on documents, such as the parcel number. Staff work the queue under **Applications**: mark complete and set the fee, record payment, record inspections, approve or issue, or send it back with an AI-drafted list of changes. Residents are told at each step by email, text or phone call (`RESEND_API_KEY` + `NOTIFY_FROM_EMAIL`, `TELNYX_API_KEY` + `TELNYX_FROM` for texts, `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_FROM` for calls); without those secrets messages are logged as not sent and phone sign-in is off. A daily cron reminds residents about unfinished drafts and requested changes. The AI never approves anything. A city's fees and options per form live in `settings.permits` (see [`platform/cities/wiggins.json`](platform/cities/wiggins.json)).
 - **Local development.** Put a test code in `platform/.dev.vars` (gitignored) and run `npx wrangler dev` from `platform/`. Durable Objects, D1 and R2 run locally; Workers AI always runs remotely.
 
 `wiggins.cityhallos.com` ([`workers/wiggins`](workers/wiggins)) serves the Wiggins site and adds the embed line to every
@@ -102,6 +102,26 @@ After a reset, sign in locally as `DEV_ADMIN_EMAIL` with `DEV_ADMIN_PASSWORD` fr
 refuses to run against production.
 
 ### Connecting text messages and calls
+
+Texts go through Telnyx (cheapest per message); calls still go through Twilio.
+
+**Texts (Telnyx)**
+
+1. In Telnyx, buy a local number for the city (Numbers → Search & Buy Numbers).
+2. Create a messaging profile (Messaging → Programmable Messaging) with its inbound webhook set to
+   `https://app.cityhallos.com/api/<city>/telnyx/sms` (API v2), and assign the number to it. The dashboard's Channels
+   page shows the address.
+3. Register the city for business texting (Messaging → 10DLC: a brand for the city and a campaign). Carriers block
+   unregistered texts, and approval takes days to weeks.
+4. Once for the platform: `npx wrangler secret put TELNYX_API_KEY`, `TELNYX_PUBLIC_KEY` (Account Settings → Keys &
+   Credentials → Public Key) and `TELNYX_FROM` (the number notifications and sign-in codes come from, as +1…), from
+   `platform/`. Without `TELNYX_PUBLIC_KEY` the webhook refuses traffic. Replies to a resident come from the number they
+   texted. With `TELNYX_API_KEY` set, every outgoing text goes through Telnyx instead of Twilio.
+
+Locally, `TELNYX_ALLOW_UNSIGNED=1` in `.dev.vars` lets you post test texts without Telnyx; without `TELNYX_API_KEY`
+the reply comes back in the response instead of being texted.
+
+**Calls (Twilio)**
 
 1. In Twilio, buy a local number for the city.
 2. Set the number's **A message comes in** webhook to `https://app.cityhallos.com/api/<city>/twilio/sms` and

@@ -117,7 +117,7 @@ back automatically, once; after that staff decide. Fees, templates and payment i
 per number); no passwords. City store migration #8 (`MIGRATIONS[7]`) adds `residents`, `resident_codes` and `resident_sessions` (codes and
 session tokens stored as SHA-256 hashes) and `permits.resident_id`. A signed-in resident's applications follow them to
 any device, and their name, email and mailing address fill in new applications. Sign-in codes are never written to the
-outbox. Without Twilio the sign-in is unavailable and applications still work by secret link; locally,
+outbox. Without Telnyx or Twilio the sign-in is unavailable and applications still work by secret link; locally,
 `DEV_SHOW_CODES=1` shows the code on screen instead.
 
 ## Audit log
@@ -135,8 +135,12 @@ Every channel uses the same reply logic (`src/reply.js`): the same knowledge bas
 and conversation log.
 
 - **Website chat and portal:** `public/embed.js`, streaming from `POST /api/{city}/chat`.
-- **Text messages and calls:** `src/phone.js`. Each city's Twilio number sends texts to `POST /api/{city}/twilio/sms`
-  and calls to `POST /api/{city}/twilio/voice`. Requests are checked against Twilio's signature (`TWILIO_AUTH_TOKEN`).
+- **Text messages and calls:** `src/phone.js`. Each city's Telnyx number sends texts to `POST /api/{city}/telnyx/sms`,
+  checked against Telnyx's Ed25519 signature (`TELNYX_PUBLIC_KEY`, events over five minutes old refused). Telnyx needs a
+  quick answer, so the reply is written after responding and sent through the Telnyx API from the number the resident
+  texted. Opt-out words (STOP, CANCEL…) are left to Telnyx. A Twilio number still works: texts to
+  `POST /api/{city}/twilio/sms` and calls to `POST /api/{city}/twilio/voice`, checked against Twilio's signature
+  (`TWILIO_AUTH_TOKEN`).
   Residents can ask questions, report a problem (the reply walks them through location and details and returns a
   reference number), check a request by texting its number, and ask for a person. Callers are transferred to City Hall
   during office hours. Report and call state lives in `conversations.flow`.

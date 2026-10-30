@@ -621,6 +621,34 @@ try:
         ok({'sms', 'voice'} <= {c['channel'] for c in r['conversations']}, 'texts and calls are logged as conversations')
     else:
         print(f'SKIP text and phone checks (webhooks answered {s}: {body[:60]})')
+
+    # Telnyx texts (local with TELNYX_ALLOW_UNSIGNED=1 and no TELNYX_API_KEY, where the reply comes back in the response).
+    def telnyx(text, sender='+15555550143', event_type='message.received'):
+        event = {'data': {'event_type': event_type, 'payload': {'direction': 'inbound', 'text': text,
+                 'from': {'phone_number': sender}, 'to': [{'phone_number': '+15555550100'}]}}}
+        req = urllib.request.Request(f'{ORIGIN}/api/{A}/telnyx/sms', data=json.dumps(event).encode(), method='POST',
+                                     headers={'Content-Type': 'application/json', 'User-Agent': 'CityHallOS-scripts/1.0'})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as res:
+                body = res.read().decode()
+                return res.status, json.loads(body)['reply'] if body else ''
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+    s, reply = telnyx('There is a pothole on Elm Street')
+    if s == 200:
+        ok('address' in reply, 'a Telnyx text about a problem starts a report')
+        telnyx('Elm St and 3rd')
+        s, reply = telnyx('SKIP')
+        ref = (re.search(r'TST-\d+', reply) or [None])[0]
+        ok(bool(ref), f'the report texted through Telnyx gets a reference number ({ref})')
+        s, reply = telnyx(ref or 'x')
+        ok(ref and ref in reply and 'new' in reply, 'texting the reference number through Telnyx returns its status')
+        s, reply = telnyx('STOP')
+        ok(s == 204, 'opt-out words are left to Telnyx')
+        s, reply = telnyx('', event_type='message.finalized')
+        ok(s == 204, 'delivery receipts get no reply')
+    else:
+        print(f'SKIP Telnyx text checks (webhook answered {s}: {str(reply)[:60]})')
     text, done = chat(A, 'How do I make a public records request for police reports?')
     ok(done['flags'].get('offerRecords') and 'Request public records' in text, 'asking for public records in the chat offers the records request')
 

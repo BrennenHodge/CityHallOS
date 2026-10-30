@@ -8,6 +8,8 @@ DEV_ADMIN_PASSWORD=local-dev-password
 # ANTHROPIC_API_KEY=
 # Lets you try the text and phone webhooks locally without Twilio's signature. Never set this in production.
 TWILIO_ALLOW_UNSIGNED=1
+# The same for the Telnyx text webhook. Without TELNYX_API_KEY the reply comes back in the response. Never set this in production.
+TELNYX_ALLOW_UNSIGNED=1
 # Card payments in test mode: only test cards such as 4242 4242 4242 4242 work. Never set this in production.
 PAYMENTS_PROVIDER=test
 

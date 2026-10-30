@@ -7,7 +7,7 @@ import { chunkText, extractText, guessMime } from './ingest.js';
 import { search } from './search.js';
 import { modelName } from './assistant.js';
 import { recordReply, respond, summarize } from './reply.js';
-import { phoneConfigured, phoneRoute } from './phone.js';
+import { phoneConfigured, phoneRoute, telnyxConfigured, telnyxRoute } from './phone.js';
 import { afterHours } from './hours.js';
 import { remindStale, requestCreated, requestUpdated } from './alerts.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
@@ -169,6 +169,7 @@ async function route(request, env, ctx, url) {
     if (res === 'me') return residentRoute({ request, env, url, city, store, sub: id, tokenFor });
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
     if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c), requestCreated });
+    if (res === 'telnyx') return telnyxRoute(request, env, ctx, city, store, id, { requestCreated });
     if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
     if (res === 'records') { const out = await recordsPublic(request, env, ctx, city, store, me, parts, url); if (out) return out; }
     if (res === 'licenses') { const r = await publicLicensing({ request, env, city, store, me, url, path: parts.slice(2), m }); if (r) return r; }
@@ -217,8 +218,11 @@ async function route(request, env, ctx, url) {
   if (res === 'report' && m === 'GET') { need('report.view'); return report(env, city, store, url); }
   if (res === 'channels' && m === 'GET') {
     need('channels.view');
-    const base = `${url.origin}/api/${city.slug}/twilio`;
-    return json({ phone: phoneConfigured(env), smsUrl: `${base}/sms`, voiceUrl: `${base}/voice` });
+    const base = `${url.origin}/api/${city.slug}`;
+    return json({
+      phone: phoneConfigured(env), texts: telnyxConfigured(env) ? 'telnyx' : phoneConfigured(env) ? 'twilio' : null,
+      telnyxUrl: `${base}/telnyx/sms`, smsUrl: `${base}/twilio/sms`, voiceUrl: `${base}/twilio/voice`,
+    });
   }
   if (res === 'staff') {
     if (!id && m === 'GET') { need('requests.view'); return listStaff(env, city, store, me); }

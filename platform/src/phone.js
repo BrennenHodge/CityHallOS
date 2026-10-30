@@ -1,9 +1,10 @@
-// Text messages and phone calls through Twilio: the same AI City Clerk, problem reports and request tracking
-// as the website chat. Each city's Twilio number points its webhooks at:
-//   SMS:   POST /api/{city}/twilio/sms
-//   Voice: POST /api/{city}/twilio/voice
-// Requests are checked against Twilio's signature with TWILIO_AUTH_TOKEN.
+// Text messages and phone calls: the same AI City Clerk, problem reports and request tracking as the website chat.
+// Texts come from Telnyx or Twilio, calls from Twilio. Each city's number points its webhooks at:
+//   Telnyx SMS:  POST /api/{city}/telnyx/sms    checked against Telnyx's Ed25519 signature (TELNYX_PUBLIC_KEY)
+//   Twilio SMS:  POST /api/{city}/twilio/sms    checked against Twilio's signature (TWILIO_AUTH_TOKEN)
+//   Voice:       POST /api/{city}/twilio/voice
 import { recordReply, respond, summarize } from './reply.js';
+import { telnyxText } from './notify.js';
 
 const xmlEsc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 const twiml = (inner) => new Response(`<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`, { headers: { 'Content-Type': 'text/xml' } });
@@ -74,7 +75,10 @@ export async function phoneRoute(request, env, ctx, city, store, url, kind, step
   }
   const from = String(params.From || '').slice(0, 40);
   if (!from) return new Response('Missing caller', { status: 400 });
-  if (kind === 'sms') return sms(env, ctx, city, store, url, from, String(params.Body || '').trim().slice(0, 1200), hooks);
+  if (kind === 'sms') {
+    const text = await textReply(env, ctx, city, store, from, String(params.Body || '').trim().slice(0, 1200), hooks);
+    return twiml(`<Message>${xmlEsc(text.slice(0, 1500))}</Message>`);
+  }
   if (kind === 'voice' && !step) return voiceStart(city, url);
   if (kind === 'voice' && step === 'turn') return voiceTurn(env, ctx, city, store, url, from, params, hooks);
   return new Response('Not found', { status: 404 });
@@ -82,12 +86,57 @@ export async function phoneRoute(request, env, ctx, city, store, url, kind, step
 
 /* ---------------- Text messages ---------------- */
 
-async function sms(env, ctx, city, store, url, from, body, hooks) {
+// Telnyx posts each text as a signed JSON event, and the reply goes back through its API.
+export const telnyxConfigured = (env) => !!(env.TELNYX_API_KEY && env.TELNYX_PUBLIC_KEY && env.TELNYX_FROM);
+
+// Opt-out and opt-in words. Telnyx answers these itself and stops or resumes texts to the number.
+const OPT_WORDS = /^\s*(stop|stopall|unsubscribe|cancel|end|quit|start|unstop)\s*$/i;
+const b64bytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+// Telnyx signs "timestamp|body" with Ed25519. Events older than five minutes are refused, so they can't be replayed.
+async function telnyxSigned(env, raw, sig, ts) {
+  if (!sig || !ts || !(Math.abs(Date.now() / 1000 - Number(ts)) <= 300)) return false;
+  try {
+    const key = await crypto.subtle.importKey('raw', b64bytes(env.TELNYX_PUBLIC_KEY), { name: 'Ed25519' }, false, ['verify']);
+    return await crypto.subtle.verify('Ed25519', key, b64bytes(sig), new TextEncoder().encode(`${ts}|${raw}`));
+  } catch { return false; }
+}
+
+export async function telnyxRoute(request, env, ctx, city, store, kind, hooks) {
+  if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+  if (kind !== 'sms') return new Response('Not found', { status: 404 });
+  const raw = await request.text();
+  if (env.TELNYX_PUBLIC_KEY) {
+    if (!(await telnyxSigned(env, raw, request.headers.get('telnyx-signature-ed25519'), request.headers.get('telnyx-timestamp')))) return new Response('Invalid signature', { status: 403 });
+  } else if (env.TELNYX_ALLOW_UNSIGNED !== '1') { // set only in .dev.vars, for trying texts locally
+    return new Response('Text messages are not set up yet', { status: 503 });
+  }
+  let event;
+  try { event = JSON.parse(raw).data; } catch { return new Response('Bad request', { status: 400 }); }
+  const msg = event?.payload;
+  // Delivery receipts and other events need no answer.
+  if (event?.event_type !== 'message.received' || !msg) return new Response(null, { status: 204 });
+  const from = String(msg.from?.phone_number || '').slice(0, 40);
+  if (!from) return new Response('Missing sender', { status: 400 });
+  const body = String(msg.text || '').trim().slice(0, 1200);
+  if (OPT_WORDS.test(body)) return new Response(null, { status: 204 });
+  // Without an API key (local development) the reply comes back in the response instead of being texted.
+  if (!env.TELNYX_API_KEY) return Response.json({ reply: await textReply(env, ctx, city, store, from, body, hooks) });
+  // Telnyx expects a quick answer, so the reply is written and sent after responding, from the number the resident texted.
+  const to = msg.to?.[0]?.phone_number || env.TELNYX_FROM;
+  ctx.waitUntil(textReply(env, ctx, city, store, from, body, hooks)
+    .then((text) => telnyxText(env, { from: to, to: from, text }))
+    .catch((e) => console.error(`Telnyx reply to ${city.slug} text failed: ${e.message}`)));
+  return new Response(null, { status: 204 });
+}
+
+// The reply to one text, as plain text: Twilio sends it back in TwiML, Telnyx through its API.
+async function textReply(env, ctx, city, store, from, body, hooks) {
   const s = city.settings;
   const recent = await store.findConversation('sms', from, new Date(Date.now() - 24 * 36e5).toISOString());
   const flow = recent?.flow ? JSON.parse(recent.flow) : null;
   const { convoId, history } = await store.beginTurn({ convoId: recent?.id || null, channel: 'sms', contact: from, question: body || '(empty message)' });
-  const reply = async (text, flag = 'action') => { await store.addReply(convoId, text, flag); return twiml(`<Message>${xmlEsc(text.slice(0, 1500))}</Message>`); };
+  const reply = async (text, flag = 'action') => { await store.addReply(convoId, text, flag); return text; };
 
   if (!body) return reply(`Hi, this is ${s.assistantName} for the ${s.cityName}. Ask me a question about city services, or tell me about a problem to report.`);
 
@@ -117,7 +166,7 @@ async function sms(env, ctx, city, store, url, from, body, hooks) {
   if (r.type) {
     await store.setFlow(convoId, { name: 'report', type: r.type.key, description: body, step: 'location' });
     await recordReply(env, store, convoId, r);
-    return twiml(`<Message>${xmlEsc(plain(r.answer))}</Message>`);
+    return plain(r.answer);
   }
   await recordReply(env, store, convoId, r);
   // A city form links to its online application, never the PDF.
@@ -125,8 +174,7 @@ async function sms(env, ctx, city, store, url, from, body, hooks) {
   // An online service the resident asked about (paying a water bill...) links straight to it.
   const service = !apply && r.flags.links?.[0];
   const link = apply || service?.url || r.used.filter((u) => !u.form).map((u) => u.url).find((u) => /^https?:/.test(u || ''));
-  const text = brief(plain(r.answer), 600) + (link && !r.flags.emergency ? `\n\n${apply ? 'Apply online' : service ? service.label : 'More'}: ${link}` : '');
-  return twiml(`<Message>${xmlEsc(text.slice(0, 1500))}</Message>`);
+  return brief(plain(r.answer), 600) + (link && !r.flags.emergency ? `\n\n${apply ? 'Apply online' : service ? service.label : 'More'}: ${link}` : '');
 }
 
 async function fileReport(env, ctx, city, store, convoId, from, flow, details, channel, hooks) {

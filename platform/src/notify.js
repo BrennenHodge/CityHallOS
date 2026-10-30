@@ -1,13 +1,16 @@
-// Messages to residents: email (Resend), text messages and phone calls (Twilio).
+// Messages to residents: email (Resend), text messages (Telnyx, or Twilio) and phone calls (Twilio).
 // Every message is written to the city's outbox, sent or not, so staff can see exactly what a resident was told.
 // Without provider keys the message is recorded as not sent, and nothing leaves the platform.
 //   RESEND_API_KEY, NOTIFY_FROM_EMAIL                       email
+//   TELNYX_API_KEY, TELNYX_FROM                             text messages (used instead of Twilio when set)
 //   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM       text messages and calls
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const hasTelnyx = (env) => !!(env.TELNYX_API_KEY && env.TELNYX_FROM);
+const hasTwilio = (env) => !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM);
 
 export function channels(env) {
-  return { email: !!(env.RESEND_API_KEY && env.NOTIFY_FROM_EMAIL), sms: !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM), call: !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM) };
+  return { email: !!(env.RESEND_API_KEY && env.NOTIFY_FROM_EMAIL), sms: hasTelnyx(env) || hasTwilio(env), call: hasTwilio(env) };
 }
 
 function e164(phone) {
@@ -57,6 +60,18 @@ async function twilio(env, path, params) {
   return data.sid;
 }
 
+// One text message through Telnyx. Returns its message id.
+export async function telnyxText(env, { to, text, from = env.TELNYX_FROM }) {
+  const res = await fetch('https://api.telnyx.com/v2/messages', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.TELNYX_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to, text: text.slice(0, 1500) }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.errors?.[0]?.detail || data.errors?.[0]?.title || `Telnyx ${res.status}`);
+  return data.data?.id;
+}
+
 // msg: { subject, body, sms, voice, link, linkLabel }. to: { email, phone, pref }.
 // Sends on the preferred channel. A phone call is always followed by a text or email with the details.
 export async function notify(env, store, city, { entityType, entityId, to, msg }) {
@@ -71,7 +86,8 @@ export async function notify(env, store, city, { entityType, entityId, to, msg }
     else if (channels(env)[ch]) {
       try {
         if (ch === 'email') providerId = await sendEmail(env, city, addr, msg);
-        else if (ch === 'sms') providerId = await twilio(env, 'Messages.json', { To: addr, From: env.TWILIO_FROM, Body: text.slice(0, 1500) });
+        else if (ch === 'sms') providerId = hasTelnyx(env) ? await telnyxText(env, { to: addr, text })
+          : await twilio(env, 'Messages.json', { To: addr, From: env.TWILIO_FROM, Body: text.slice(0, 1500) });
         else {
           const say = `<Response><Pause length="1"/><Say voice="Polly.Joanna">Hello, this is the ${esc(city.name)}. ${esc(text)} We have also sent you the details in writing. Thank you.</Say></Response>`;
           providerId = await twilio(env, 'Calls.json', { To: addr, From: env.TWILIO_FROM, Twiml: say });

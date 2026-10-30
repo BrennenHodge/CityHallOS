@@ -2,7 +2,7 @@
   // City Hall OS platform: staff dashboard, knowledge base API and the embeddable AI City Clerk.
   //   npx wrangler deploy
   // Secrets: ADMIN_KEY (City Hall OS operator access code), ANTHROPIC_API_KEY (optional; uses Claude instead of Workers AI).
-// Optional, for messages to residents: RESEND_API_KEY + NOTIFY_FROM_EMAIL (email), TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_FROM (texts and calls).
+// Optional, for messages to residents: RESEND_API_KEY + NOTIFY_FROM_EMAIL (email), TELNYX_API_KEY + TELNYX_PUBLIC_KEY + TELNYX_FROM (texts), TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_FROM (calls, and texts without Telnyx).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "cityhallos-platform",
   "account_id": "d06c70a0b6279642a6243926161f574b",
