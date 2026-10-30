@@ -4,6 +4,7 @@
 // Every change made by staff, residents or the AI is written to that city's append-only audit log.
 import { DurableObject } from 'cloudflare:workers';
 import { DEFAULT_DEPARTMENTS, DEFAULT_REQUEST_TYPES } from './templates.js';
+import { licensingStore } from './licensing-store.js';
 
 const now = () => new Date().toISOString();
 const uid = (p) => p + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
@@ -191,6 +192,108 @@ const MIGRATIONS = [
   CREATE INDEX audit_entity ON audit_log (entity_type, entity_id, id);
   CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
+  `,
+  // Business (privilege) licenses under Miss. Code Ann. § 27-17. See src/licensing.js.
+  `
+  -- The city's license classes, fees, term and wording, as one JSON document edited under Business licenses > Settings.
+  CREATE TABLE license_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_by TEXT,
+    updated_at TEXT NOT NULL
+  );
+
+  -- Numbered per city: {prefix}-BL-1001. A renewal is a new application for an existing license.
+  CREATE TABLE license_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'new' CHECK (kind IN ('new', 'renewal')),
+    license_id INTEGER REFERENCES licenses(id),
+    status TEXT NOT NULL DEFAULT 'submitted'
+      CHECK (status IN ('submitted', 'in_review', 'needs_info', 'awaiting_payment', 'paid', 'issued', 'denied', 'withdrawn')),
+    business_name TEXT NOT NULL,
+    dba TEXT,
+    description TEXT,
+    class_key TEXT,
+    entity_type TEXT,
+    owner_name TEXT,
+    phone TEXT,
+    email TEXT,
+    mailing_address TEXT,
+    location TEXT,
+    inside_limits TEXT CHECK (inside_limits IN ('yes', 'no', 'unsure')),
+    home_based INTEGER NOT NULL DEFAULT 0,
+    home TEXT,
+    employees INTEGER,
+    sos_id TEXT,
+    dor_account TEXT,
+    state_licenses TEXT,
+    start_date TEXT,
+    fee_cents INTEGER,
+    fee_lines TEXT,
+    paid_cents INTEGER,
+    payment_method TEXT CHECK (payment_method IN ('cash', 'check', 'card')),
+    payment_ref TEXT,
+    card_last4 TEXT,
+    receipt_no TEXT,
+    paid_at TEXT,
+    refunded_cents INTEGER,
+    refund_ref TEXT,
+    period_start TEXT,
+    period_end TEXT,
+    decision_reason TEXT,
+    source TEXT NOT NULL DEFAULT 'web',
+    convo_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT
+  );
+  CREATE INDEX license_applications_status ON license_applications (status, id);
+  INSERT INTO sqlite_sequence (name, seq) VALUES ('license_applications', 1000);
+
+  -- The timeline on an application. Public rows are shown on the applicant's tracking page.
+  CREATE TABLE license_events (
+    id INTEGER PRIMARY KEY,
+    application_id INTEGER NOT NULL REFERENCES license_applications(id) ON DELETE CASCADE,
+    at TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_id TEXT,
+    actor_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    note TEXT,
+    public INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX license_events_application ON license_events (application_id, id);
+
+  -- The registry. Expired is worked out from expires_on, so only revocation is stored.
+  CREATE TABLE licenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    number TEXT NOT NULL UNIQUE,
+    business_name TEXT NOT NULL,
+    dba TEXT,
+    class_key TEXT,
+    class_label TEXT,
+    owner_name TEXT,
+    phone TEXT,
+    email TEXT,
+    location TEXT,
+    home_based INTEGER NOT NULL DEFAULT 0,
+    issued_on TEXT NOT NULL,
+    expires_on TEXT NOT NULL,
+    fee_cents INTEGER,
+    application_id INTEGER REFERENCES license_applications(id),
+    revoked_at TEXT,
+    revoke_reason TEXT,
+    reminded_for TEXT,
+    reminder_result TEXT,
+    lapsed_notice_for TEXT,
+    source TEXT NOT NULL DEFAULT 'issued',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX licenses_expires ON licenses (expires_on);
+  CREATE INDEX licenses_name ON licenses (business_name);
+  INSERT INTO sqlite_sequence (name, seq) VALUES ('licenses', 1000);
   `,
 ];
 
@@ -581,7 +684,8 @@ export class CityStore extends DurableObject {
 
   // Everything this city has, for backups or when a city wants its data.
   exportAll() {
-    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log'];
+    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log',
+      'license_settings', 'license_applications', 'license_events', 'licenses'];
     return Object.fromEntries(tables.map((t) => [t, this.all(`SELECT * FROM ${t}`)]));
   }
 
@@ -657,3 +761,6 @@ export class CityStore extends DurableObject {
     return { ...this.stats(), filesMoved: moved.size };
   }
 }
+
+// Business licensing methods (lic*), kept in their own module.
+Object.assign(CityStore.prototype, licensingStore);

@@ -11,18 +11,19 @@ export const ROLES = {
     label: 'Knowledge editor',
     description: 'Manages the knowledge base and reviews conversations',
     perms: ['overview', 'knowledge.view', 'knowledge.edit', 'assistant.test', 'conversations.view', 'conversations.review',
-      'requests.view', 'channels.view', 'audit.view'],
+      'requests.view', 'channels.view', 'audit.view', 'licenses.view'],
   },
   department: {
     label: 'Department staff',
     description: "Works their own department's service requests",
+    // Licenses only for staff of the licensing department (City Hall unless the city's license settings say otherwise).
     perms: ['overview', 'knowledge.view', 'assistant.test', 'conversations.view', 'requests.view', 'requests.edit', 'requests.create',
-      'residents.contact'],
+      'residents.contact', 'licenses.view', 'licenses.manage'],
   },
   viewer: {
     label: 'Viewer',
     description: 'Can see the dashboard but not change anything',
-    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'channels.view'],
+    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'channels.view', 'licenses.view'],
   },
 };
 

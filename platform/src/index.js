@@ -10,6 +10,7 @@ import { STATE_NAMES, defaultSettings } from './templates.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
+import { isLicenseQuestion, licensingDaily, licensingSources, publicLicensing, staffLicensing } from './licensing.js';
 
 export { CityStore } from './store.js';
 export { AuthService } from './auth.js';
@@ -107,6 +108,12 @@ export default {
       return fail(e.status || 500, e.status || local ? e.message : 'Something went wrong. Please try again.');
     }
   },
+
+  // Daily jobs (cron in wrangler.jsonc): business license renewal notices.
+  async scheduled(event, env, ctx) {
+    const { results } = await env.DB.prepare("SELECT * FROM cities WHERE status = 'active'").all();
+    ctx.waitUntil(licensingDaily(env, results.map((r) => { const city = toCity(r); return { city, store: storeFor(env, city) }; })));
+  },
 };
 
 async function route(request, env, ctx, url) {
@@ -139,6 +146,7 @@ async function route(request, env, ctx, url) {
     if (res === 'track' && m === 'GET' && id) return trackRequest(store, id);
     if (res === 'forms' && m === 'GET') return listForms(city, store);
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
+    if (res === 'licenses') { const r = await publicLicensing({ request, env, city, store, me, url, path: parts.slice(2), m }); if (r) return r; }
   }
 
   // Staff only. Each route names the permission it needs.
@@ -165,6 +173,7 @@ async function route(request, env, ctx, url) {
     if (id && sub === 'photo' && m === 'GET') { need('requests.view'); return requestPhoto(env, store, id, me); }
     if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, store, id, me); }
   }
+  if (res === 'licenses') return staffLicensing({ request, env, city, store, me, need, url, path: parts.slice(2), m });
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
   if (res === 'staff') {
     if (!id && m === 'GET') { need('requests.view'); return listStaff(env, city, store, me); }
@@ -193,6 +202,7 @@ async function publicConfig(city, store) {
     city: city.slug, cityName: s.cityName, assistantName: s.assistantName, tagline: s.tagline, greeting: s.greeting,
     brandColor: s.brandColor, suggestions: s.suggestions, phone: s.phone, policeNonEmergency: s.policeNonEmergency,
     requestTypes: (await store.requestTypes()).map(({ key, label }) => ({ key, label })),
+    modules: ['licensing'], // chat add-ons the widget loads: /embed-{name}.js
   }, 200, { 'Cache-Control': 'public, max-age=60' });
 }
 
@@ -371,7 +381,7 @@ async function chat(request, env, ctx, city, store, me) {
   const run = async () => {
     let answer = '';
     let sources = [];
-    let flags = { needsStaff: false, offerReport: false, emergency: false };
+    let flags = { needsStaff: false, offerReport: false, emergency: false, offerLicense: false };
     let reportType = null;
     try {
       const emergency = isEmergency(question);
@@ -394,7 +404,9 @@ async function chat(request, env, ctx, city, store, me) {
         // Short follow-ups ("what about fences?") search better with the previous question attached.
         const lastUser = [...history].reverse().find((h) => h.role === 'user');
         const q = question.split(/\s+/).length < 6 && lastUser ? `${lastUser.content} ${question}` : question;
-        const hits = await search(env, store, s, q, { includeInternal: staff, limit: 6 });
+        flags.offerLicense = isLicenseQuestion(q);
+        const hits = [...(flags.offerLicense ? await licensingSources(store, city, new URL(request.url).origin) : []),
+          ...(await search(env, store, s, q, { includeInternal: staff, limit: 6 }))];
         sources = [
           { n: 1, title: 'City Hall contact information', category: 'City profile', url: s.website || null, as_of: 'current', authority: 'staff-note' },
           ...hits.map((h, i) => ({
