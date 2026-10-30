@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from chos import PLATFORM, Api, read_vars  # noqa: E402
 
-PORT = 8787
+PORT = int(os.environ.get('CHOS_PORT', 8787))  # another port when several checkouts run at once
 ORIGIN = f'http://127.0.0.1:{PORT}'
 DEV_VARS = PLATFORM / '.dev.vars'
 
@@ -44,7 +44,7 @@ run('npx wrangler d1 execute cityhallos --local --file schema.sql')
 
 print('Starting a temporary local server...')
 log = open(PLATFORM / '.wrangler' / 'dev_reset.log', 'w')
-server = subprocess.Popen(f'npx wrangler dev --port {PORT}', cwd=PLATFORM, shell=True, stdout=log, stderr=subprocess.STDOUT)
+server = subprocess.Popen(f'npx wrangler dev --port {PORT} --inspector-port {PORT + 500}', cwd=PLATFORM, shell=True, stdout=log, stderr=subprocess.STDOUT)
 try:
     for _ in range(90):
         try:

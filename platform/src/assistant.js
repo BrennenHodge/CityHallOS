@@ -18,7 +18,7 @@ export const isEmergency = (text) => EMERGENCY.test(text);
 // Residents reporting a problem (not asking how to report one) go straight to the report form.
 const REPORTS = [
   ['pothole', /\bpot ?holes?\b|\b(road|street) (is )?(damaged|broken|crumbling|caved)\b|\bsinkhole\b/i],
-  ['streetlight', /\bstreet ?lights? (is |are )?(out|off|broken|flickering|not working|dark)\b|\blight (is )?out on\b/i],
+  ['streetlight', /\bstreet ?lights?\b.{0,40}\b(is|are|went|been) (out|off|broken|flickering|not working|dark)\b|\bstreet ?lights? (out|off|broken|flickering|not working|dark)\b|\blight (is )?out on\b/i],
   ['water', /\bwater (main |line |pipe )?(leak|leaking|break|broke|gushing)\b|\b(no|low) water (pressure)?\b|\bleak(ing)? (in|on|at) the (street|road|yard)\b|\bhydrant\b.*\b(leak|broken|open)/i],
   ['sewer', /\bsewer\b.*\b(back(ed)? ?up|overflow|smell|odor)\b|\bsewage\b/i],
   ['drainage', /\b(ditch|culvert|drain|storm drain)\b.*\b(clogged|blocked|flooding|overflow)\b|\bstreet (is )?flooded\b/i],
@@ -52,9 +52,17 @@ const authorityNote = (s, a) => ({
   'curated-research': 'researched summary prepared for City Hall OS',
 }[a] || a);
 
-// forms: the applications residents can fill out in the chat (permits/routes.js formList).
-export function systemPrompt(s, forms = []) {
-  return `You are ${s.assistantName}, the AI City Clerk for the ${s.cityName}, ${s.state} (${s.county}). You are the city's virtual front desk on its website.${s.disambiguation ? ' ' + s.disambiguation : ''}
+// How replies should read on each channel. Citations stay in every channel so the platform knows which sources
+// were used; text messages and calls remove them before the resident sees or hears the reply.
+const CHANNEL_STYLE = {
+  web: "You are the city's virtual front desk on its website.",
+  sms: "You are answering a resident by text message. Keep it to two or three short sentences, plain text with no markdown, bullets or bold. Don't write web addresses; the platform adds a link when it helps.",
+  voice: "You are answering a resident on a phone call. Speak in two or three short, natural sentences that sound right read aloud: no lists, no markdown, no web addresses. Write phone numbers normally, like 601-928-7221; the platform reads them aloud digit by digit.",
+};
+
+// forms: the applications residents can fill out online (permits/routes.js formList).
+export function systemPrompt(s, channel = 'web', forms = []) {
+  return `You are ${s.assistantName}, the AI City Clerk for the ${s.cityName}, ${s.state} (${s.county}). ${CHANNEL_STYLE[channel] || CHANNEL_STYLE.web}${s.disambiguation ? ' ' + s.disambiguation : ''}
 
 How to answer:
 - Answer ONLY from the numbered sources in the user's message. Cite each fact with one source number in square brackets right after it, like [2] or [2][4]. Never write ranges like [2-5] or lists like [1, 2], and only cite a source that actually says the fact. Never invent phone numbers, names, fees, dates, hours or rules.
@@ -68,7 +76,9 @@ How to answer:
 - If the sources don't answer the question, say plainly that you don't have that in the city's documents yet, give the City Hall phone number (${s.phone}), say you've flagged the question for City Hall staff, and end your reply with the exact token <<NEEDS_STAFF>>.
 - If the resident is reporting a problem the city should fix (pothole, water leak, streetlight out, missed trash, drainage, downed tree, overgrown lot), briefly acknowledge it and end your reply with the exact token <<OFFER_REPORT>> so the chat can open the report form.
 - If anything sounds like an emergency or danger to life or property, tell them to call 911 right away.${forms.length ? `
-- Residents can fill out these applications online, right here in this chat: ${forms.map((f) => `${f.title} (${f.kind})`).join('; ')}. When a resident needs one, say they can start it here in the chat, and end your reply with the exact token <<FORM:kind>> using the kind in parentheses, so the chat shows a button. Never tell them to download, print or fill out a PDF form; the online application replaces it, and the chat's AI helper answers questions while they fill it out.` : ''}
+- Residents can fill out these applications online: ${forms.map((f) => `${f.title} (${f.kind})`).join('; ')}. ${channel === 'web' || channel === 'staff-test'
+    ? 'When a resident needs one, say they can start it here in the chat, and end your reply with the exact token <<FORM:kind>> using the kind in parentheses, so the chat shows a button.'
+    : `When a resident needs one, say they can fill it out online in the chat on the city's website${s.publicSite || s.website ? ` (${s.publicSite || s.website})` : ''}, on their phone, and end your reply with the exact token <<FORM:kind>> using the kind in parentheses.`} Never tell them to download, print or fill out a PDF form; the online application replaces it, and its AI helper answers questions while they fill it out.` : ''}
 - Never ask for or repeat sensitive personal data (Social Security numbers, card numbers, passwords).`;
 }
 

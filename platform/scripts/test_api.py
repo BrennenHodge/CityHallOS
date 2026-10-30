@@ -8,7 +8,7 @@ Usage: python -I test_api.py <origin> <key_file>
 Each run creates two throwaway test cities with their own staff and archives them at the end, so it
 never touches a real city. It refuses to run against production.
 """
-import http.cookiejar, json, secrets, sys, urllib.request
+import http.cookiejar, json, re, secrets, sys, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -292,6 +292,33 @@ try:
     ok(all(x in subjects for x in ['needs a few changes', 'fee due', 'has been issued']) and all(o['channel'] == 'email' for o in r['outbox']),
        'the applicant is told at each step on their chosen channel, and every message is logged')
 
+    # Text messages and phone calls (only where the webhooks accept test traffic: local with TWILIO_ALLOW_UNSIGNED=1).
+    def twilio(path, **form):
+        req = urllib.request.Request(f'{ORIGIN}/api/{A}/twilio/{path}', data=urllib.parse.urlencode(form).encode(), method='POST',
+                                     headers={'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'CityHallOS-scripts/1.0'})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as res:
+                return res.status, res.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+    s, body = twilio('sms', From='+15555550142', Body='There is a pothole on Oak Street')
+    if s == 200:
+        ok('address' in body, 'a text about a problem starts a report')
+        twilio('sms', From='+15555550142', Body='Oak St and 2nd')
+        s, body = twilio('sms', From='+15555550142', Body='SKIP')
+        ref = (re.search(r'TST-\d+', body) or [None])[0]
+        ok(bool(ref), f'the texted report gets a reference number ({ref})')
+        s, body = twilio('sms', From='+15555550142', Body=ref or 'x')
+        ok(ref and ref in body and 'new' in body, 'texting the reference number returns its status')
+        s, body = twilio('voice', From='+15555550199', CallSid='CAtest')
+        ok('<Gather' in body and 'emergency' in body, 'calls are greeted and told to dial 911 for emergencies')
+        s, body = twilio('voice/turn', From='+15555550199', CallSid='CAtest', SpeechResult="that's all")
+        ok('<Hangup/>' in body, 'callers can end the call')
+        s, r = admin.call('GET', f'/{A}/conversations')
+        ok({'sms', 'voice'} <= {c['channel'] for c in r['conversations']}, 'texts and calls are logged as conversations')
+    else:
+        print(f'SKIP text and phone checks (webhooks answered {s}: {body[:60]})')
+
     # Audit log.
     s, r = admin.call('GET', f'/{A}/audit')
     acts = {e['action'] for e in r['events']}
@@ -304,7 +331,7 @@ try:
     s, _ = works.call('GET', f'/{A}/audit')
     ok(s == 403, "department staff can't read the audit log")
     s, r = admin.call('GET', f'/{A}/export')
-    ok(s == 200 and 'audit_log' in r and len(r['requests']) == 2, 'admins export the whole city')
+    ok(s == 200 and 'audit_log' in r and len(r['requests']) >= 2, 'admins export the whole city')
 finally:
     for slug in (A, B):
         operator.call('PUT', f'/platform/cities/{slug}/status', {'status': 'archived'})

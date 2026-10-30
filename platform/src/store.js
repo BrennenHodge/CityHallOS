@@ -275,6 +275,22 @@ const MIGRATIONS = [
   CREATE INDEX outbox_entity ON outbox (entity_type, entity_id, id);
   INSERT OR IGNORE INTO meta (key, value) VALUES ('permit_seq', '1000');
   `,
+  // Routing rules, source checks, verification dates, notification state and text-message intake.
+  `
+  ALTER TABLE request_types ADD COLUMN default_assignee_id TEXT REFERENCES staff(id);
+  ALTER TABLE request_types ADD COLUMN notify_staff TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE request_types ADD COLUMN after_hours_staff TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE staff ADD COLUMN notify_pref TEXT NOT NULL DEFAULT 'email';
+  ALTER TABLE documents ADD COLUMN source_hash TEXT;
+  ALTER TABLE documents ADD COLUMN source_checked_at TEXT;
+  ALTER TABLE documents ADD COLUMN source_changed_at TEXT;
+  ALTER TABLE documents ADD COLUMN verified_at TEXT;
+  ALTER TABLE documents ADD COLUMN verified_by TEXT;
+  ALTER TABLE requests ADD COLUMN reminded_at TEXT;
+  ALTER TABLE conversations ADD COLUMN flow TEXT;
+  CREATE INDEX conversations_contact ON conversations (channel, contact, last_at);
+  `,
+  // Resident accounts: phone sign-in, sessions, and who an application belongs to (residents.js).
   `
   -- Residents who sign in with their phone number. Applications they start (or open while signed in) are theirs,
   -- so My applications works on any device. Codes and sessions are stored as SHA-256 hashes.
@@ -311,11 +327,25 @@ const parsePermit = (p) => p && Object.fromEntries(Object.entries(p).map(([k, v]
 const PERMIT_LIST = `SELECT p.id, p.ref, p.kind, p.status, p.applicant, p.address, p.contact, p.progress, p.fee_estimate, p.fee_assessed, p.fee_paid, p.permit_number,
   p.checks, p.review, p.created_at, p.updated_at, p.submitted_at, p.decided_at, p.assignee_id, s.name AS assignee FROM permits p LEFT JOIN staff s ON s.id = p.assignee_id`;
 
-const DOC_COLS = 'id, title, category, source_url, authority, visibility, verification, as_of, file_name, mime, bytes, chars, chunks, status, error, notes, created_by, updated_by, created_at, updated_at';
+const DOC_COLS = 'id, title, category, source_url, authority, visibility, verification, as_of, file_name, mime, bytes, chars, chunks, status, error, notes, created_by, updated_by, created_at, updated_at, verified_at, verified_by, source_checked_at, source_changed_at';
 const DOC_FIELDS = ['title', 'category', 'source_url', 'authority', 'visibility', 'verification', 'as_of', 'notes'];
 const REQUEST_SELECT = `SELECT r.*, d.name AS department, s.name AS assignee FROM requests r
   JOIN departments d ON d.id = r.department_id LEFT JOIN staff s ON s.id = r.assignee_id`;
 const CLOSED = ['resolved', 'closed'];
+
+const slug = (s) => String(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'item';
+const ids = (v) => (Array.isArray(v) ? v : JSON.parse(v || '[]'));
+const median = (xs) => { if (!xs.length) return null; const a = [...xs].sort((x, y) => x - y); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+const hoursBetween = (a, b) => (new Date(b) - new Date(a)) / 36e5;
+
+// What a web page says, without markup, scripts or whitespace differences: the basis for spotting changes at the source.
+function visibleText(html) {
+  return html.replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+async function sha256(data) {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 // Field-by-field differences, for the audit log.
 function diff(before, after, fields) {
@@ -328,7 +358,22 @@ export class CityStore extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    ctx.blockConcurrencyWhile(async () => this.migrate());
+    ctx.blockConcurrencyWhile(async () => {
+      this.migrate();
+      // Background work (checking sources for changes) runs on this store's alarm, once the city exists.
+      if (this.cityId() && !(await ctx.storage.getAlarm())) await ctx.storage.setAlarm(Date.now() + 60_000 + Math.random() * 3600e3);
+    });
+  }
+
+  cityId() { return this.one("SELECT value FROM meta WHERE key = 'city_id'")?.value || null; }
+
+  async alarm() {
+    try {
+      await this.checkSources(8);
+    } catch (e) {
+      console.log('source check failed', e.message);
+    }
+    await this.ctx.storage.setAlarm(Date.now() + (this.sourcesDue() ? 3600e3 : 6 * 3600e3));
   }
 
   migrate() {
@@ -384,15 +429,15 @@ export class CityStore extends DurableObject {
     return this.all(`SELECT s.*, d.name AS department FROM staff s LEFT JOIN departments d ON d.id = s.department_id
       ORDER BY s.active DESC, s.name`);
   }
-  staffMember(id) { return this.one('SELECT * FROM staff WHERE id = ?', id); }
+  staffMember(id) { return id ? this.one('SELECT * FROM staff WHERE id = ?', id) : null; }
   staffByUser(userId) { return this.one('SELECT * FROM staff WHERE user_id = ?', userId); }
 
   addStaff(p, actor, note) {
     const id = uid('s');
     const t = now();
     this.tx(() => {
-      this.run('INSERT INTO staff (id, name, title, department_id, email, phone, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        id, p.name, p.title ?? null, p.department_id ?? null, p.email ?? null, p.phone ?? null, p.user_id ?? null, t, t);
+      this.run('INSERT INTO staff (id, name, title, department_id, email, phone, user_id, notify_pref, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        id, p.name, p.title ?? null, p.department_id ?? null, p.email ?? null, p.phone ?? null, p.user_id ?? null, p.notify_pref === 'sms' ? 'sms' : 'email', t, t);
       this.log(actor, 'staff.create', 'staff', id, `Added ${p.name} to the staff directory${note ? `. ${note}` : ''}`);
     });
     return this.staffMember(id);
@@ -402,10 +447,11 @@ export class CityStore extends DurableObject {
     const before = this.staffMember(id);
     if (!before) return null;
     const next = { ...before, ...p };
-    const changes = diff(before, next, ['name', 'title', 'department_id', 'email', 'phone', 'active']);
+    if (!['email', 'sms'].includes(next.notify_pref)) next.notify_pref = 'email';
+    const changes = diff(before, next, ['name', 'title', 'department_id', 'email', 'phone', 'active', 'notify_pref']);
     this.tx(() => {
-      this.run('UPDATE staff SET name = ?, title = ?, department_id = ?, email = ?, phone = ?, user_id = ?, active = ?, updated_at = ? WHERE id = ?',
-        next.name, next.title, next.department_id, next.email, next.phone, next.user_id, next.active, now(), id);
+      this.run('UPDATE staff SET name = ?, title = ?, department_id = ?, email = ?, phone = ?, user_id = ?, active = ?, notify_pref = ?, updated_at = ? WHERE id = ?',
+        next.name, next.title, next.department_id, next.email, next.phone, next.user_id, next.active, next.notify_pref, now(), id);
       if (Object.keys(changes).length || note) this.log(actor, 'staff.update', 'staff', id, note || `Updated ${next.name}`, changes);
     });
     return this.staffMember(id);
@@ -542,6 +588,23 @@ export class CityStore extends DurableObject {
     });
   }
 
+  // The ongoing text or call conversation with a phone number, if it's recent enough to continue.
+  findConversation(channel, contact, since) {
+    return this.one('SELECT id, flow FROM conversations WHERE channel = ? AND contact = ? AND last_at >= ? ORDER BY last_at DESC LIMIT 1', channel, contact, since);
+  }
+
+  // A conversation's step-by-step intake state (text and phone reports), or null when there is none.
+  setFlow(convoId, flow) { this.run('UPDATE conversations SET flow = ? WHERE id = ?', flow ? JSON.stringify(flow) : null, convoId); }
+
+  // A reply the platform wrote itself (intake prompts, confirmations), saved like any answer.
+  addReply(convoId, content, flag = 'action') {
+    const t = now();
+    this.run("INSERT INTO messages (convo_id, role, content, flag, model, created_at) VALUES (?, 'assistant', ?, ?, 'workflow', ?)", convoId, content, flag, t);
+    this.run('UPDATE conversations SET messages = messages + 2, last_at = ? WHERE id = ?', t, convoId);
+  }
+
+  flagConversation(convoId, status) { this.run('UPDATE conversations SET status = ? WHERE id = ?', status, convoId); }
+
   listConversations({ status } = {}) {
     const args = [];
     let where = "channel != 'staff-test'";
@@ -589,6 +652,13 @@ export class CityStore extends DurableObject {
       this.run('INSERT INTO request_events (request_id, at, actor_type, actor_id, actor_name, status, note, public) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
         id, t, actor.type, actor.id ?? null, actor.name, 'new', `${actor.type === 'staff' || actor.type === 'operator' ? 'Logged by staff' : 'Submitted by resident'}. Routed to ${dept.name}.`);
       this.log(actor, 'request.create', 'request', ref, `${ref} created: ${type.label}${r.location ? ` at ${r.location}` : ''}, routed to ${dept.name}`);
+      // The request type's routing rule can assign new requests to someone straight away.
+      const assignee = type.default_assignee_id ? this.staffMember(type.default_assignee_id) : null;
+      if (assignee?.active) {
+        this.run("UPDATE requests SET assignee_id = ?, status = 'assigned' WHERE id = ?", assignee.id, id);
+        this.run("INSERT INTO request_events (request_id, at, actor_type, actor_name, status, note, public) VALUES (?, ?, 'system', 'Routing rule', 'assigned', ?, 1)",
+          id, t, `Assigned to ${assignee.name}`);
+      }
       if (convoId) {
         this.run("INSERT INTO messages (convo_id, role, content, flag, model, created_at) VALUES (?, 'assistant', ?, 'action', 'workflow', ?)",
           convoId, `Created service request ${ref} (${type.label}) and routed it to ${dept.name}.`, t);
@@ -596,6 +666,13 @@ export class CityStore extends DurableObject {
       return { id, ref, department: dept.name };
     });
   }
+
+  // New requests nobody has picked up, older than the cutoff and not yet reminded about.
+  staleRequests(cutoff) {
+    return this.all(`${REQUEST_SELECT} WHERE r.status = 'new' AND r.assignee_id IS NULL AND r.reminded_at IS NULL AND r.created_at < ? ORDER BY r.id`, cutoff);
+  }
+
+  markReminded(id) { this.run('UPDATE requests SET reminded_at = ? WHERE id = ?', now(), id); }
 
   setRequestPhoto(id, key) { this.run('UPDATE requests SET photo_key = ? WHERE id = ?', key, id); }
   requestPhotoKey(id) { return this.one('SELECT photo_key, department_id FROM requests WHERE id = ?', id); }
@@ -655,6 +732,159 @@ export class CityStore extends DurableObject {
       this.log(actor, 'request.update', 'request', before.ref, `${before.ref}: ${note}`, changes);
     });
     return this.getRequest(id);
+  }
+
+  /* ---------------- City setup: departments, request types, routing ---------------- */
+
+  saveDepartment(d, actor) {
+    const before = d.id ? this.one('SELECT * FROM departments WHERE id = ?', d.id) : null;
+    if (d.id && !before) throw new Error('Department not found');
+    if (this.one('SELECT id FROM departments WHERE name = ? AND id != ?', d.name ?? before?.name, before?.id || '')) throw new Error('Another department has that name');
+    let id = before?.id;
+    if (!id) { id = slug(d.name); while (this.one('SELECT id FROM departments WHERE id = ?', id)) id += '-x'; }
+    const next = { name: before?.name, phone: null, email: null, active: 1, sort: (this.one('SELECT MAX(sort) AS m FROM departments').m ?? 0) + 1, ...before, ...d, id };
+    this.tx(() => {
+      this.run('INSERT OR REPLACE INTO departments (id, name, phone, email, active, sort) VALUES (?, ?, ?, ?, ?, ?)', id, next.name, next.phone, next.email, next.active ? 1 : 0, next.sort);
+      const changes = diff(before || {}, next, ['name', 'phone', 'email', 'active']);
+      if (Object.keys(changes).length) this.log(actor, before ? 'department.update' : 'department.create', 'department', id, `${before ? 'Updated' : 'Added'} the ${next.name} department`, changes);
+    });
+    return this.departments();
+  }
+
+  requestTypesAdmin() {
+    return this.all('SELECT t.*, d.name AS department FROM request_types t JOIN departments d ON d.id = t.department_id ORDER BY t.sort')
+      .map((t) => ({ ...t, notify_staff: ids(t.notify_staff), after_hours_staff: ids(t.after_hours_staff) }));
+  }
+
+  saveRequestType(t, actor) {
+    const before = t.key ? this.one('SELECT * FROM request_types WHERE key = ?', t.key) : null;
+    const key = before?.key || slug(t.label).replace(/-/g, '_');
+    if (!before && this.one('SELECT key FROM request_types WHERE key = ?', key)) throw new Error('A request type with that name already exists');
+    const next = { priority: 'normal', active: 1, sort: (this.one('SELECT MAX(sort) AS m FROM request_types').m ?? 0) + 1, default_assignee_id: null, ...before, ...t, key };
+    next.notify_staff = JSON.stringify(ids(next.notify_staff));
+    next.after_hours_staff = JSON.stringify(ids(next.after_hours_staff));
+    if (!this.one('SELECT id FROM departments WHERE id = ?', next.department_id)) throw new Error('Choose a department');
+    for (const sid of [next.default_assignee_id, ...ids(next.notify_staff), ...ids(next.after_hours_staff)].filter(Boolean)) {
+      if (!this.staffMember(sid)) throw new Error('Unknown staff member in routing');
+    }
+    if (!['low', 'normal', 'high', 'urgent'].includes(next.priority)) throw new Error('Invalid priority');
+    this.tx(() => {
+      this.run(`INSERT OR REPLACE INTO request_types (key, label, department_id, priority, active, sort, default_assignee_id, notify_staff, after_hours_staff)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, key, next.label, next.department_id, next.priority, next.active ? 1 : 0, next.sort,
+      next.default_assignee_id || null, next.notify_staff, next.after_hours_staff);
+      const changes = diff(before || {}, next, ['label', 'department_id', 'priority', 'active', 'default_assignee_id', 'notify_staff', 'after_hours_staff']);
+      if (Object.keys(changes).length) this.log(actor, before ? 'request_type.update' : 'request_type.create', 'request_type', key, `${before ? 'Updated' : 'Added'} the "${next.label}" request type`, changes);
+    });
+    return this.requestTypesAdmin();
+  }
+
+  // Who hears about a new request of this type: the after-hours list when City Hall is closed, then the
+  // type's own list, then everyone active in the department with contact details.
+  routing(typeKey, afterHours) {
+    const t = this.one('SELECT * FROM request_types WHERE key = ?', typeKey);
+    if (!t) return [];
+    const pick = (list) => ids(list).map((id) => this.staffMember(id)).filter((s) => s?.active);
+    let people = afterHours ? pick(t.after_hours_staff) : [];
+    if (!people.length) people = pick(t.notify_staff);
+    if (!people.length) people = this.all('SELECT * FROM staff WHERE department_id = ? AND active = 1 AND (email IS NOT NULL OR phone IS NOT NULL)', t.department_id);
+    return people;
+  }
+
+  /* ---------------- Knowledge freshness ---------------- */
+
+  freshness() {
+    const yearAgo = new Date(Date.now() - 365 * 864e5).toISOString();
+    return {
+      changed: this.all(`SELECT ${DOC_COLS} FROM documents WHERE source_changed_at IS NOT NULL ORDER BY source_changed_at DESC`),
+      stale: this.all(`SELECT ${DOC_COLS} FROM documents WHERE verification = 'verified_current' AND COALESCE(verified_at, updated_at) < ? ORDER BY COALESCE(verified_at, updated_at)`, yearAgo),
+      errors: this.all(`SELECT ${DOC_COLS} FROM documents WHERE status = 'error' ORDER BY updated_at DESC`),
+      verification: this.all('SELECT verification, COUNT(*) AS n FROM documents GROUP BY verification'),
+      sources: this.one("SELECT COUNT(*) AS total, COALESCE(SUM(source_checked_at IS NOT NULL), 0) AS checked, MAX(source_checked_at) AS last_check FROM documents WHERE source_url LIKE 'http%'"),
+    };
+  }
+
+  verifyDocument(id, actor) {
+    const before = this.documentRow(id);
+    if (!before) return null;
+    const t = now();
+    this.tx(() => {
+      this.run("UPDATE documents SET verification = 'verified_current', verified_at = ?, verified_by = ?, source_changed_at = NULL, updated_at = ? WHERE id = ?", t, actor.name, t, id);
+      this.log(actor, 'document.verify', 'document', id, `Confirmed "${before.title}" is current`, { verification: [before.verification, 'verified_current'] });
+    });
+    return this.documentRow(id);
+  }
+
+  clearSourceChange(id) { this.run('UPDATE documents SET source_changed_at = NULL WHERE id = ?', id); }
+
+  sourcesDue() {
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+    return this.one("SELECT COUNT(*) AS n FROM documents WHERE source_url LIKE 'http%' AND status = 'ready' AND (source_checked_at IS NULL OR source_checked_at < ?)", weekAgo).n;
+  }
+
+  // Fetches a few sources that haven't been checked this week. A change is flagged for staff, never applied on its own.
+  async checkSources(limit = 8) {
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+    const docs = this.all(`SELECT id, title, source_url, source_hash FROM documents WHERE source_url LIKE 'http%' AND status = 'ready'
+      AND (source_checked_at IS NULL OR source_checked_at < ?) ORDER BY source_checked_at IS NOT NULL, source_checked_at LIMIT ?`, weekAgo, limit);
+    let changed = 0;
+    for (const d of docs) {
+      let hash = null;
+      try {
+        const r = await fetch(d.source_url, { headers: { 'User-Agent': 'CityHallOS source check' }, redirect: 'follow' });
+        if (r.ok) {
+          const buf = await r.arrayBuffer();
+          hash = await sha256((r.headers.get('Content-Type') || '').includes('html') ? visibleText(new TextDecoder().decode(buf)) : new Uint8Array(buf));
+        }
+      } catch (e) {
+        console.log('source fetch failed', d.source_url, e.message);
+      }
+      const t = now();
+      if (hash && d.source_hash && hash !== d.source_hash) {
+        changed++;
+        this.tx(() => {
+          this.run('UPDATE documents SET source_hash = ?, source_checked_at = ?, source_changed_at = ? WHERE id = ?', hash, t, t, d.id);
+          this.log({ type: 'system', name: 'Source check' }, 'document.source_changed', 'document', d.id,
+            `The source of "${d.title}" changed. Review it and re-import if needed.`);
+        });
+      } else {
+        this.run('UPDATE documents SET source_hash = COALESCE(?, source_hash), source_checked_at = ? WHERE id = ?', hash, t, d.id);
+      }
+    }
+    return { checked: docs.length, changed };
+  }
+
+  /* ---------------- Results report ---------------- */
+
+  report({ since, tzModifier = '+0 minutes' }) {
+    const real = "c.channel != 'staff-test'";
+    const answers = this.one(`SELECT COUNT(*) AS total, COALESCE(SUM(m.flag = 'needs_staff'), 0) AS needs_staff, COALESCE(SUM(m.flag = 'emergency'), 0) AS emergencies,
+        COALESCE(SUM(m.flag = 'report'), 0) AS reports FROM messages m JOIN conversations c ON c.id = m.convo_id
+      WHERE ${real} AND m.role = 'assistant' AND m.flag IS NOT 'action' AND m.created_at >= ?`, since);
+    const requests = this.all(`SELECT r.id, r.category, r.source, r.status, r.created_at, r.closed_at, d.name AS department,
+        (SELECT MIN(e.at) FROM request_events e WHERE e.request_id = r.id AND e.actor_type IN ('staff', 'operator') AND e.at > r.created_at) AS first_action
+      FROM requests r JOIN departments d ON d.id = r.department_id WHERE r.created_at >= ?`, since);
+    const count = (rows, key) => Object.entries(rows.reduce((a, r) => ({ ...a, [r[key]]: (a[r[key]] || 0) + 1 }), {}))
+      .map(([k, n]) => ({ label: k, n })).sort((a, b) => b.n - a.n);
+    return {
+      conversations: this.all(`SELECT c.channel, COUNT(*) AS n FROM conversations c WHERE ${real} AND c.started_at >= ? GROUP BY c.channel ORDER BY n DESC`, since),
+      questions: this.one(`SELECT COUNT(*) AS n FROM messages m JOIN conversations c ON c.id = m.convo_id WHERE ${real} AND m.role = 'user' AND m.created_at >= ?`, since).n,
+      answers,
+      weekly: this.all(`SELECT date(datetime(c.started_at, ?), 'weekday 0', '-6 days') AS week, COUNT(*) AS conversations FROM conversations c
+        WHERE ${real} AND c.started_at >= ? GROUP BY week ORDER BY week`, tzModifier, since),
+      topics: this.all('SELECT d.category AS label, COUNT(*) AS n FROM citations ci JOIN documents d ON d.id = ci.doc_id WHERE ci.created_at >= ? GROUP BY d.category ORDER BY n DESC LIMIT 10', since),
+      topDocuments: this.all('SELECT d.id, d.title, COUNT(*) AS n FROM citations ci JOIN documents d ON d.id = ci.doc_id WHERE ci.created_at >= ? GROUP BY d.id ORDER BY n DESC LIMIT 10', since),
+      unanswered: this.all(`SELECT id, first_question, last_at FROM conversations c WHERE ${real} AND status = 'needs_review' AND last_at >= ? ORDER BY last_at DESC LIMIT 15`, since),
+      requests: {
+        total: requests.length,
+        byType: count(requests, 'category'),
+        bySource: count(requests, 'source'),
+        byDepartment: count(requests, 'department'),
+        open: requests.filter((r) => !CLOSED.includes(r.status)).length,
+        openOlderThanWeek: this.one("SELECT COUNT(*) AS n FROM requests WHERE status NOT IN ('resolved', 'closed') AND created_at < ?", new Date(Date.now() - 7 * 864e5).toISOString()).n,
+        medianHoursToFirstAction: median(requests.filter((r) => r.first_action).map((r) => hoursBetween(r.created_at, r.first_action))),
+        medianHoursToResolve: median(requests.filter((r) => r.closed_at).map((r) => hoursBetween(r.created_at, r.closed_at))),
+      },
+    };
   }
 
   /* ---------------- Permit applications ---------------- */

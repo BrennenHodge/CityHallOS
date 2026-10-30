@@ -68,7 +68,7 @@
     const headers = { ...(opts.headers || {}) };
     let body = opts.body;
     if (body && !(body instanceof FormData) && typeof body !== 'string') { body = JSON.stringify(body); headers['Content-Type'] = 'application/json'; }
-    const res = await fetch(API + path, { ...opts, headers, body });
+    const res = await fetch((path.startsWith('/api/') ? '' : API) + path, { ...opts, headers, body });
     if (res.status === 401) { boot(); throw new Error('Please sign in again'); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -252,9 +252,12 @@
     channels: { title: 'Channels & embed', sub: 'Where residents reach the AI City Clerk', icon: 'plug', render: renderChannels, perm: 'channels.view' },
     staff: { title: 'Staff & access', sub: 'Who can sign in, and what each person can do', icon: 'users', render: renderStaff, perm: 'staff.manage' },
     activity: { title: 'Activity', sub: 'Every change, by whom and when', icon: 'refresh', render: renderActivity, perm: 'audit.view' },
-    settings: { title: 'Settings', sub: 'Assistant and city profile', icon: 'gear', render: renderSettings, perm: 'settings.edit' },
+    settings: { title: 'Settings', sub: 'Assistant, city profile, departments and routing', icon: 'gear', render: renderSettings, perm: 'settings.edit' },
+    report: { title: 'Results', sub: 'What the AI City Clerk is doing for residents and staff', icon: 'grid', render: renderReport, perm: 'report.view' },
+    platform: { title: 'All cities', sub: 'City Hall OS support console', icon: 'globe', render: renderPlatform, perm: 'overview', operator: true },
   };
 
+  const allowed = (key) => can(ROUTES[key].perm) && (!ROUTES[key].operator || state.me.operator);
   const roleLabel = (key) => (state.me.operator ? 'Platform operator' : (state.me.roles.find((r) => r.key === key) || {}).label || key);
 
   function renderShell() {
@@ -267,10 +270,11 @@
             <div style="min-width:0"><strong>${esc(c.name)}</strong><small>${esc([c.county, c.state].filter(Boolean).join(', '))}</small></div></div>
           ${state.me.cities.length > 1 ? `<select class="select city-switch" id="citySwitch" aria-label="Switch city">${state.me.cities.map((x) => `<option value="${esc(x.slug)}" ${x.slug === c.slug ? 'selected' : ''}>${esc(x.name)}${x.status !== 'active' ? ` (${esc(x.status)})` : ''}</option>`).join('')}</select>` : ''}
           <nav class="nav" aria-label="Dashboard">
-            ${navGroup('', ['overview'])}
+            ${navGroup('', ['overview', 'report'])}
             ${navGroup('Brain', ['knowledge', 'assistant'])}
             ${navGroup('Residents', [['conversations', 'navReview'], ['requests', 'navReq'], ['permits', 'navPermits']])}
             ${navGroup('Setup', ['channels', 'staff', 'activity', 'settings'])}
+            ${navGroup('City Hall OS', ['platform'])}
           </nav>
           <div class="side-foot">
             <div class="model-chip">${icon('spark')}<span>AI model<br><code id="modelName">loading…</code></span></div>
@@ -301,7 +305,7 @@
   }
 
   function navGroup(label, items) {
-    const links = items.map((it) => (Array.isArray(it) ? it : [it])).filter(([key]) => can(ROUTES[key].perm)).map(([key, badge]) => navLink(key, badge));
+    const links = items.map((it) => (Array.isArray(it) ? it : [it])).filter(([key]) => allowed(key)).map(([key, badge]) => navLink(key, badge));
     return links.length ? `${label ? `<div class="nav-label">${label}</div>` : ''}${links.join('')}` : '';
   }
 
@@ -325,7 +329,7 @@
   function route() {
     if (/^#\/setup\//.test(location.hash)) { boot(); return; }
     let key = (location.hash.match(/^#\/(\w+)/) || [])[1] || 'overview';
-    if (!ROUTES[key] || !can(ROUTES[key].perm)) key = 'overview';
+    if (!ROUTES[key] || !allowed(key)) key = 'overview';
     const r = ROUTES[key];
     $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === key));
     $('#side').classList.remove('open');
@@ -461,6 +465,7 @@
         <input type="file" id="fileInput" multiple hidden accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md,.html,.htm,.png,.jpg,.jpeg,.webp,.json">
       </section>
       <div class="queue" id="queue"></div>
+      <div id="fresh"></div>
       <div class="toolbar">
         <div class="search">${icon('search')}<input class="input" id="docSearch" placeholder="Search documents" value="${esc(state.q)}"></div>
         <div class="chips" id="catChips"></div>
@@ -472,6 +477,7 @@
     $('#docSearch').oninput = (e) => { state.q = e.target.value; drawDocs(); };
     $('#catChips').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; state.cat = c.dataset.cat; drawDocs(); };
     $('#docRows').onclick = (e) => { const tr = e.target.closest('tr[data-id]'); if (tr) openDocument(tr.dataset.id); };
+    drawFreshness();
     if (!editable) { await loadDocs(); return; }
     const drop = $('#drop');
     ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
@@ -491,6 +497,31 @@
     $('#addUrl').onclick = () => addUrlModal(upload);
     $('#addNote').onclick = () => noteModal({});
     await loadDocs();
+  }
+
+  // Documents that need a person: changed at the source, verified over a year ago, or unreadable.
+  async function drawFreshness() {
+    const box = $('#fresh');
+    if (!box) return;
+    const f = await api('/freshness').catch(() => null);
+    if (!f || !$('#fresh')) return;
+    const items = [
+      ...f.changed.map((d) => ({ d, why: `Changed at the source ${ago(d.source_changed_at)}`, tone: 'amber' })),
+      ...f.stale.map((d) => ({ d, why: `Last confirmed ${ago(d.verified_at || d.updated_at)}`, tone: '' })),
+      ...f.errors.map((d) => ({ d, why: 'Could not be read', tone: 'red' })),
+    ];
+    const verified = (f.verification.find((v) => v.verification === 'verified_current') || {}).n || 0;
+    const total = f.verification.reduce((a, v) => a + v.n, 0);
+    box.innerHTML = `<div class="card" style="margin-bottom:16px"><div class="card-h"><h2>Needs review</h2><span class="pill ${items.length ? 'amber' : 'green'}">${items.length || 'Nothing'}</span>
+        <span class="faint" style="font-size:12.5px;margin-left:auto">${fmt(verified)} of ${fmt(total)} confirmed current · ${fmt(f.sources.checked)} of ${fmt(f.sources.total)} web sources checked${f.sources.last_check ? `, last ${ago(f.sources.last_check)}` : ''}</span>
+        ${can('knowledge.edit') ? `<button class="btn btn-sm" id="checkNow">${icon('refresh')} Check sources now</button>` : ''}</div>
+      ${items.length ? `<div class="card-b"><div class="list">${items.slice(0, 12).map(({ d, why, tone }) => `<div class="list-item clickable" data-doc="${d.id}"><div class="grow"><div class="title">${esc(d.title)}</div><div class="meta">${esc(d.category)}</div></div><span class="pill ${tone}">${esc(why)}</span></div>`).join('')}</div></div>`
+        : '<div class="card-b muted" style="padding-top:0">City Hall OS checks the original web pages and files every week and lists anything that changed here.</div>'}</div>`;
+    box.onclick = (e) => { const it = e.target.closest('[data-doc]'); if (it) openDocument(it.dataset.doc); };
+    $('#checkNow')?.addEventListener('click', async (e) => {
+      e.target.closest('button').disabled = true;
+      try { const r = await api('/freshness', { method: 'POST' }); toast(`Checked ${r.checked} sources, ${r.changed} changed`); drawFreshness(); } catch (err) { toast(err.message); }
+    });
   }
 
   async function loadDocs() {
@@ -674,6 +705,8 @@
         <button class="btn btn-ghost btn-sm close" aria-label="Close">${icon('x')}</button></div>
       <div class="drawer-b">
         ${doc.status === 'error' ? `<div class="card card-b" style="border-color:#f4c7c2;background:var(--red-soft)"><b>${esc(doc.error)}</b><div class="muted" style="margin-top:4px">Paste the document's text below and save to index it.</div></div>` : ''}
+        ${doc.source_changed_at ? `<div class="card card-b" style="border-color:var(--amber-line, #f1d9a6);background:var(--amber-soft)"><b>The original changed ${ago(doc.source_changed_at)}.</b><div class="muted" style="margin-top:4px">Re-import it to update what the AI reads, then confirm it's current.</div></div>` : ''}
+        <div class="muted" style="font-size:13px">${doc.verified_at ? `${icon('check')} Confirmed current by ${esc(doc.verified_by)} ${ago(doc.verified_at)}` : 'Not yet confirmed current by City Hall staff.'}</div>
         <div class="facts">
           <div class="fact"><small>Passages</small><b>${fmt(doc.chunks)}</b></div>
           <div class="fact"><small>Cited in answers</small><b>${fmt(doc.cited)}</b></div>
@@ -697,6 +730,8 @@
       <div class="drawer-f">
         ${can('knowledge.edit') ? `<button class="btn btn-danger" id="dDel">${icon('trash')} Delete</button>` : ''}
         ${doc.file_name && can('knowledge.edit') ? `<button class="btn" id="dReidx">${icon('refresh')} Re-index</button>` : ''}
+        ${/^https?:/.test(doc.source_url || '') && can('knowledge.edit') ? `<button class="btn" id="dRefresh">${icon('link')} Re-import</button>` : ''}
+        ${can('knowledge.edit') ? `<button class="btn" id="dVerify">${icon('check')} Confirm current</button>` : ''}
         <div class="right">
           ${doc.source_url ? `<a class="btn" href="${esc(doc.source_url)}" target="_blank" rel="noopener">${icon('external')} Original</a>` : doc.file_name ? `<button class="btn" id="dFile">${icon('external')} Open file</button>` : ''}
           ${can('knowledge.edit') ? '<button class="btn btn-primary" id="dSave">Save changes</button>' : ''}
@@ -721,6 +756,13 @@
       if (!b.dataset.confirm) { b.dataset.confirm = '1'; b.innerHTML = `${icon('trash')} Click again to delete`; return; }
       await api(`/documents/${id}`, { method: 'DELETE' }); closeDrawer(); toast('Document removed'); loadDocs();
     };
+    d.querySelector('#dVerify')?.addEventListener('click', async () => {
+      try { await api(`/documents/${id}/verify`, { method: 'POST' }); toast('Marked as confirmed current'); openDocument(id); loadDocs(); drawFreshness(); } catch (err) { toast(err.message); }
+    });
+    d.querySelector('#dRefresh')?.addEventListener('click', async (e) => {
+      e.target.closest('button').disabled = true;
+      try { const r = await api(`/documents/${id}/refresh`, { method: 'POST' }); toast(r.document.status === 'ready' ? 'Re-imported from the source' : r.document.error); openDocument(id); loadDocs(); drawFreshness(); } catch (err) { toast(err.message); }
+    });
     d.querySelector('#dReidx')?.addEventListener('click', async (e) => {
       e.target.closest('button').disabled = true;
       try { const r = await api(`/documents/${id}/reprocess`, { method: 'POST' }); toast(r.document.status === 'ready' ? 'Re-indexed' : r.document.error); openDocument(id); loadDocs(); } catch (err) { toast(err.message); }
@@ -1068,6 +1110,7 @@
 
   async function renderChannels(page) {
     const snippet = `<script src="${EMBED_SRC}" data-city="${CITY}" async></script>`;
+    const phone = await api('/channels');
     page.innerHTML = `
       <div class="stack" style="max-width:980px">
         <div class="card card-b"><div class="channel">
@@ -1082,14 +1125,16 @@
           <span></span></div></div>
         <div class="card card-b"><div class="channel">
           <div class="channel-icon" style="background:var(--violet-soft);color:var(--violet)">${icon('phone')}</div>
-          <div><h3>Voice agent <span class="pill amber" style="margin-left:6px">Ready to connect</span></h3>
-            <p>The phone agent uses this same knowledge base and the same rules: it answers from city documents, files requests and transfers to staff. Connect a City Hall phone number to turn it on.</p>
-            <div class="code" style="margin-top:12px">POST ${location.origin}/api/${CITY}/chat
-{ "message": "What time does City Hall close?", "channel": "voice" }</div></div><span></span></div></div>
+          <div><h3>Phone and text messages ${phone.phone ? '<span class="pill green" style="margin-left:6px">Twilio connected</span>' : '<span class="pill amber" style="margin-left:6px">Needs a Twilio number</span>'}</h3>
+            <p>Residents call or text a City Hall number. The AI answers from this knowledge base, takes problem reports with a tracking number, checks on requests by number, and hands callers to City Hall during office hours. Every call and text appears under Conversations.</p>
+            <ol class="muted" style="margin:10px 0 0;padding-left:20px;font-size:13.5px">
+              <li>Buy a local number in Twilio (Phone Numbers → Buy a number).</li>
+              <li>On the number, set <b>A message comes in</b> to the first address below and <b>A call comes in</b> to the second, both as HTTP POST.</li>
+              <li>City Hall OS support adds the Twilio account keys to the platform once; every city's number then works.</li>
+            </ol>
+            <div class="code" style="margin-top:12px">Messages: ${esc(phone.smsUrl)}
+Calls:    ${esc(phone.voiceUrl)}</div></div><span></span></div></div>
         <div class="cols cols-2">
-          <div class="card card-b"><div class="channel" style="grid-template-columns:48px 1fr">
-            <div class="channel-icon" style="background:var(--green-soft);color:var(--green)">${icon('sms')}</div>
-            <div><h3>Text messages <span class="pill amber" style="margin-left:6px">Ready to connect</span></h3><p>Residents text questions and report issues by SMS. Same knowledge base, same conversation log. Send messages to the chat API with <code>"channel": "sms"</code>.</p></div></div></div>
           <div class="card card-b"><div class="channel" style="grid-template-columns:48px 1fr">
             <div class="channel-icon" style="background:var(--amber-soft);color:var(--amber)">${icon('mail')}</div>
             <div><h3>Email inbox</h3><p>Draft replies to the City Clerk's inbox from city documents, for staff to approve and send.</p><span class="pill" style="margin-top:8px">Coming next</span></div></div></div>
@@ -1143,8 +1188,23 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
           <label class="field"><span>Site where the chat is installed</span><input class="input" name="publicSite" value="${esc(s.publicSite || '')}" placeholder="https://"></label>
           <label class="field"><span>Other current facts</span><textarea class="textarea" name="profileNotes" rows="4" placeholder="e.g. The Board of Aldermen meets the first and third Tuesday of each month at 6 pm at City Hall.">${esc(s.profileNotes || '')}</textarea></label>
         </div></div>
+        <div class="card"><div class="card-h"><h2>Office hours and results</h2></div><div class="card-b stack" style="gap:14px">
+          <p class="muted" style="margin:0">Office hours decide who hears about a new request after hours. The two numbers below turn questions answered into staff time saved on the Results page.</p>
+          <div class="grid-2">
+            <label class="field"><span>Opens</span><input class="input" type="time" name="openTime" value="${esc(s.openTime || '08:00')}"></label>
+            <label class="field"><span>Closes</span><input class="input" type="time" name="closeTime" value="${esc(s.closeTime || '17:00')}"></label>
+          </div>
+          <div class="field"><span>Open on</span><div class="chips" id="openDays">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => `<button type="button" class="chip ${(s.openDays || [1, 2, 3, 4, 5]).includes(i) ? 'on' : ''}" data-day="${i}">${d}</button>`).join('')}</div></div>
+          <div class="grid-2">
+            <label class="field"><span>Minutes staff spend on a typical call</span><input class="input" type="number" min="0" step="0.5" name="minutesPerCall" value="${esc(s.minutesPerCall ?? 4)}"></label>
+            <label class="field"><span>Calls per week before City Hall OS</span><input class="input" type="number" min="0" name="baselineCallsPerWeek" value="${esc(s.baselineCallsPerWeek ?? '')}" placeholder="Your baseline count"></label>
+          </div>
+        </div></div>
         <div><button class="btn btn-primary" type="submit">${icon('check')} Save settings</button></div>
-      </form>`;
+      </form>
+      <div class="stack" style="max-width:1100px;margin-top:22px" id="routingArea"><div class="empty"><div class="spin" style="margin:20px auto"></div></div></div>`;
+    $('#openDays').onclick = (e) => { const c = e.target.closest('.chip'); if (c) c.classList.toggle('on'); };
+    renderRouting($('#routingArea'));
     const f = $('#sForm');
     f.brandColor.oninput = () => { $('#colorText').value = f.brandColor.value; };
     $('#colorText').oninput = (e) => { if (/^#[0-9a-f]{6}$/i.test(e.target.value)) f.brandColor.value = e.target.value; };
@@ -1152,12 +1212,169 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
       e.preventDefault();
       const body = Object.fromEntries(new FormData(f).entries());
       body.suggestions = body.suggestions.split('\n').map((x) => x.trim()).filter(Boolean);
+      body.openDays = $$('#openDays .chip.on').map((c) => Number(c.dataset.day));
       try {
         const saved = await api('/settings', { method: 'PUT', body });
         Object.assign(state.city, { shortName: saved.shortName, publicSite: saved.publicSite, brandColor: saved.brandColor });
         PUBLIC_SITE = saved.publicSite || '';
         toast('Settings saved. The chatbot updates within a minute.');
       } catch (err) { toast(err.message); }
+    };
+  }
+
+  /* ---------------- Departments and request routing (in Settings) ---------------- */
+
+  async function renderRouting(area) {
+    const [{ departments }, { requestTypes }, { staff }] = await Promise.all([api('/departments'), api('/request-types'), api('/staff')]);
+    const people = staff.filter((p) => p.active);
+    const nameOf = (id) => people.find((p) => p.id === id)?.name || '—';
+    const names = (list) => (list.length ? list.map(nameOf).map(esc).join(', ') : '<span class="faint">Department staff</span>');
+    area.innerHTML = `
+      <div class="card"><div class="card-h"><h2>Departments</h2><button class="btn btn-sm" id="dNew" style="margin-left:auto">${icon('plus')} Add department</button></div>
+        <div style="overflow:auto"><table class="table"><thead><tr><th>Department</th><th>Phone</th><th>Email</th><th>Status</th></tr></thead><tbody id="dRows">
+        ${departments.map((d) => `<tr data-id="${esc(d.id)}"><td><strong>${esc(d.name)}</strong></td><td>${esc(d.phone || '—')}</td><td>${esc(d.email || '—')}</td><td>${d.active ? '<span class="pill green">Active</span>' : '<span class="pill">Inactive</span>'}</td></tr>`).join('')}
+        </tbody></table></div></div>
+      <div class="card"><div class="card-h"><h2>Request types and routing</h2><button class="btn btn-sm" id="tNew" style="margin-left:auto">${icon('plus')} Add request type</button></div>
+        <div class="card-b" style="padding-bottom:0"><p class="muted" style="margin:0">Who gets a text or email when a resident reports each kind of problem. With nobody listed, everyone in the department with contact details is told.</p></div>
+        <div style="overflow:auto"><table class="table"><thead><tr><th>Request type</th><th>Department</th><th>Priority</th><th>Assign to</th><th>Tell during hours</th><th>Tell after hours</th></tr></thead><tbody id="tRows">
+        ${requestTypes.map((t) => `<tr data-key="${esc(t.key)}" ${t.active ? '' : 'style="opacity:.55"'}><td><strong>${esc(t.label)}</strong></td><td>${esc(t.department)}</td><td>${esc(t.priority)}</td>
+          <td>${t.default_assignee_id ? esc(nameOf(t.default_assignee_id)) : '<span class="faint">Nobody</span>'}</td><td>${names(t.notify_staff)}</td><td>${t.after_hours_staff.length ? names(t.after_hours_staff) : '<span class="faint">Same as during hours</span>'}</td></tr>`).join('')}
+        </tbody></table></div></div>`;
+    const deptModal = (d = null) => {
+      const m = modal(`
+        <h2>${d ? esc(d.name) : 'Add a department'}</h2>
+        <label class="field"><span>Name</span><input class="input" id="dmName" value="${esc(d?.name || '')}"></label>
+        <div class="grid-2"><label class="field"><span>Phone</span><input class="input" id="dmPhone" value="${esc(d?.phone || '')}"></label>
+          <label class="field"><span>Email</span><input class="input" id="dmEmail" value="${esc(d?.email || '')}"></label></div>
+        ${d ? `<label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="dmActive" ${d.active ? 'checked' : ''}> <span>Active</span></label>` : ''}
+        <div class="row"><button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="dmSave">Save</button></div>`);
+      m.querySelector('#dmSave').onclick = async () => {
+        const body = { name: m.querySelector('#dmName').value, phone: m.querySelector('#dmPhone').value, email: m.querySelector('#dmEmail').value };
+        if (d) body.active = m.querySelector('#dmActive').checked;
+        try { await api(d ? `/departments/${d.id}` : '/departments', { method: d ? 'PUT' : 'POST', body }); m.remove(); toast('Saved'); state.departments = null; renderRouting(area); } catch (e) { toast(e.message); }
+      };
+    };
+    const typeModal = (t = null) => {
+      const pick = (id, sel) => `<select class="select" id="${id}" multiple size="4">${people.map((p) => `<option value="${esc(p.id)}" ${sel.includes(p.id) ? 'selected' : ''}>${esc(p.name)}${p.department ? ` · ${esc(p.department)}` : ''}</option>`).join('')}</select>`;
+      const m = modal(`
+        <h2>${t ? esc(t.label) : 'Add a request type'}</h2>
+        <div class="grid-2">
+          <label class="field"><span>Name residents see</span><input class="input" id="tmLabel" value="${esc(t?.label || '')}"></label>
+          <label class="field"><span>Department</span><select class="select" id="tmDept">${departments.filter((d) => d.active || d.id === t?.department_id).map((d) => `<option value="${esc(d.id)}" ${d.id === t?.department_id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
+          <label class="field"><span>Priority</span><select class="select" id="tmPri">${['low', 'normal', 'high', 'urgent'].map((p) => `<option ${p === (t?.priority || 'normal') ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
+          <label class="field"><span>Assign new requests to</span><select class="select" id="tmAssign"><option value="">Nobody (staff pick it up)</option>${people.map((p) => `<option value="${esc(p.id)}" ${p.id === t?.default_assignee_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+          <label class="field"><span>Tell during office hours</span>${pick('tmNotify', t?.notify_staff || [])}<small>Ctrl-click to choose several.</small></label>
+          <label class="field"><span>Tell after hours (on call)</span>${pick('tmAfter', t?.after_hours_staff || [])}</label>
+        </div>
+        ${t ? `<label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="tmActive" ${t.active ? 'checked' : ''}> <span>Residents can choose this type</span></label>` : ''}
+        ${people.length ? '' : '<small class="faint">Add people under Staff &amp; access to route requests to them.</small>'}
+        <div class="row"><button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="tmSave">Save</button></div>`);
+      const sel = (id) => [...m.querySelector(id).selectedOptions].map((o) => o.value);
+      m.querySelector('#tmSave').onclick = async () => {
+        const body = { label: m.querySelector('#tmLabel').value, department_id: m.querySelector('#tmDept').value, priority: m.querySelector('#tmPri').value,
+          default_assignee_id: m.querySelector('#tmAssign').value || null, notify_staff: sel('#tmNotify'), after_hours_staff: sel('#tmAfter') };
+        if (t) body.active = m.querySelector('#tmActive').checked;
+        try { await api(t ? `/request-types/${t.key}` : '/request-types', { method: t ? 'PUT' : 'POST', body }); m.remove(); toast('Saved'); renderRouting(area); } catch (e) { toast(e.message); }
+      };
+    };
+    $('#dNew').onclick = () => deptModal();
+    $('#tNew').onclick = () => typeModal();
+    $('#dRows').onclick = (e) => { const tr = e.target.closest('tr[data-id]'); if (tr) deptModal(departments.find((d) => d.id === tr.dataset.id)); };
+    $('#tRows').onclick = (e) => { const tr = e.target.closest('tr[data-key]'); if (tr) typeModal(requestTypes.find((t) => t.key === tr.dataset.key)); };
+  }
+
+  /* ---------------- Results report ---------------- */
+
+  async function renderReport(page) {
+    state.reportDays ??= 30;
+    const r = await api(`/report?days=${state.reportDays}`);
+    const pct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
+    const hrs = (x) => (x == null ? '—' : x < 1 ? `${Math.round(x * 60)} min` : x < 48 ? `${x.toFixed(1)} h` : `${(x / 24).toFixed(1)} days`);
+    const bars = (rows) => { const max = Math.max(1, ...rows.map((x) => x.n)); return rows.length ? `<div class="meter">${rows.map((x) => `<div class="meter-row"><span>${esc(x.label)}</span><b>${x.n}</b><div class="track"><i style="width:${(x.n / max) * 100}%"></i></div></div>`).join('')}</div>` : emptyNote('grid', 'Nothing yet in this period.'); };
+    const weekMax = Math.max(1, ...r.weekly.map((w) => w.conversations));
+    $('#pageActions').innerHTML = `<div class="seg" id="rDays">${[[30, '30 days'], [90, '90 days'], [365, '12 months']].map(([d, l]) => `<button class="${state.reportDays === d ? 'on' : ''}" data-d="${d}">${l}</button>`).join('')}</div>
+      <button class="btn" id="rCsv">${icon('file')} Download CSV</button>`;
+    const i = r.impact;
+    page.innerHTML = `
+      <div class="kpis">
+        ${kpi('chat', 'Resident questions', fmt(r.questions), `${i.questionsPerWeek.toFixed(1)} a week${i.baselineCallsPerWeek ? ` · baseline ${fmt(i.baselineCallsPerWeek)} calls a week` : ''}`)}
+        ${kpi('check', 'Answered without staff', pct(i.selfServedRate), `${fmt(i.selfServed)} of ${fmt(r.answers.total)} replies`)}
+        ${kpi('users', 'Staff time saved', hrs(i.staffHoursSaved), `At ${i.minutesPerCall} minutes a call`)}
+        ${kpi('clipboard', 'Service requests', fmt(r.requests.total), `${fmt(r.requests.open)} still open · ${fmt(r.requests.openOlderThanWeek)} open over a week`)}
+      </div>
+      <div class="cols cols-2">
+        <div class="card"><div class="card-h"><h2>Response times</h2></div><div class="card-b"><div class="facts">
+          <div class="fact"><small>First staff action (median)</small><b>${hrs(r.requests.medianHoursToFirstAction)}</b></div>
+          <div class="fact"><small>Resolved (median)</small><b>${hrs(r.requests.medianHoursToResolve)}</b></div>
+          <div class="fact"><small>Emergency redirects</small><b>${fmt(r.answers.emergencies)}</b></div></div></div></div>
+        <div class="card"><div class="card-h"><h2>Conversations by week</h2></div><div class="card-b">${r.weekly.length ? `<div class="bars">${r.weekly.map((w) => `<div class="bar" title="Week of ${w.week}: ${w.conversations}"><i style="height:${Math.max(3, (w.conversations / weekMax) * 110)}px"></i><small>${w.week.slice(5)}</small></div>`).join('')}</div>` : emptyNote('chat', 'No conversations in this period.')}</div></div>
+        <div class="card"><div class="card-h"><h2>What residents ask about</h2></div><div class="card-b">${bars(r.topics)}</div></div>
+        <div class="card"><div class="card-h"><h2>Requests by type</h2></div><div class="card-b">${bars(r.requests.byType)}</div></div>
+        <div class="card"><div class="card-h"><h2>Requests by department</h2></div><div class="card-b">${bars(r.requests.byDepartment)}</div></div>
+        <div class="card"><div class="card-h"><h2>Channels</h2></div><div class="card-b">${bars(r.conversations.map((c) => ({ label: c.channel, n: c.n })))}</div></div>
+        <div class="card"><div class="card-h"><h2>Most-cited documents</h2></div><div class="card-b"><div class="list">${r.topDocuments.length ? r.topDocuments.map((d) => `<div class="list-item"><div class="grow"><div class="title">${esc(d.title)}</div></div><span class="pill blue">${d.n}×</span></div>`).join('') : emptyNote('file', 'No citations in this period.')}</div></div></div>
+        <div class="card"><div class="card-h"><h2>Questions the AI couldn't answer</h2></div><div class="card-b"><div class="list">${r.unanswered.length ? r.unanswered.map((c) => `<div class="list-item clickable" data-convo="${c.id}"><div class="grow"><div class="title">${esc(c.first_question)}</div><div class="meta">${ago(c.last_at)}</div></div></div>`).join('') : emptyNote('check', 'None in this period.')}</div></div></div>
+      </div>`;
+    $('#rDays').onclick = (e) => { const b = e.target.closest('button'); if (b) { state.reportDays = Number(b.dataset.d); renderReport(page); } };
+    page.onclick = (e) => { const c = e.target.closest('[data-convo]'); if (c) { state.convoId = c.dataset.convo; location.hash = '#/conversations'; } };
+    $('#rCsv').onclick = () => {
+      const rows = [['Measure', 'Value'], ['Period (days)', r.days], ['Resident questions', r.questions], ['Replies', r.answers.total], ['Answered without staff', i.selfServed],
+        ['Answered without staff (%)', i.selfServedRate == null ? '' : Math.round(i.selfServedRate * 100)], ['Staff hours saved', i.staffHoursSaved.toFixed(1)],
+        ['Emergency redirects', r.answers.emergencies], ['Service requests', r.requests.total], ['Open requests', r.requests.open],
+        ['Median hours to first staff action', r.requests.medianHoursToFirstAction?.toFixed(1) ?? ''], ['Median hours to resolve', r.requests.medianHoursToResolve?.toFixed(1) ?? ''],
+        ...r.requests.byType.map((x) => [`Requests: ${x.label}`, x.n]), ...r.topics.map((x) => [`Questions about: ${x.label}`, x.n])];
+      const csv = rows.map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      a.download = `${CITY}-results-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+    };
+  }
+
+  /* ---------------- Support console (City Hall OS operators) ---------------- */
+
+  async function renderPlatform(page) {
+    const { cities } = await api('/api/platform/cities?stats=1');
+    $('#pageActions').innerHTML = `<button class="btn btn-primary" id="cNew">${icon('plus')} Add a city</button>`;
+    const STATUS = { onboarding: ['Onboarding', 'amber'], active: ['Active', 'green'], suspended: ['Suspended', 'red'], archived: ['Archived', ''] };
+    page.innerHTML = `
+      <div class="card" style="overflow:auto"><table class="table">
+        <thead><tr><th>City</th><th>Status</th><th class="num">Documents</th><th class="num">Conversations</th><th class="num">Requests</th><th class="num">Size</th><th></th></tr></thead>
+        <tbody id="pRows">${cities.filter((c) => c.status !== 'archived' || state.showArchived).map((c) => `<tr data-slug="${esc(c.slug)}">
+          <td><strong>${esc(c.name)}</strong><div class="faint" style="font-size:12.5px">${esc([c.county, c.state].filter(Boolean).join(', '))} · <span class="mono">${esc(c.id)}</span></div></td>
+          <td><select class="select" data-status="${esc(c.slug)}">${Object.entries(STATUS).map(([k, [l]]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
+          <td class="num">${fmt(c.stats?.documents)}</td><td class="num">${fmt(c.stats?.conversations)}</td><td class="num">${fmt(c.stats?.requests)}</td><td class="num">${bytes(c.stats?.bytes)}</td>
+          <td><button class="btn btn-sm" data-open="${esc(c.slug)}">Open</button></td></tr>`).join('')}</tbody></table></div>
+      <label class="faint" style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px"><input type="checkbox" id="pArch" ${state.showArchived ? 'checked' : ''}> Show archived cities</label>`;
+    $('#pArch').onchange = (e) => { state.showArchived = e.target.checked; renderPlatform(page); };
+    page.onchange = async (e) => {
+      const sel = e.target.closest('[data-status]'); if (!sel) return;
+      try { await api(`/api/platform/cities/${sel.dataset.status}/status`, { method: 'PUT', body: { status: sel.value } }); toast('Status updated'); } catch (err) { toast(err.message); }
+    };
+    page.onclick = async (e) => {
+      const b = e.target.closest('[data-open]'); if (!b) return;
+      const me = await fetch('/api/auth/me').then((res) => res.json());
+      state.me = me;
+      const c = me.cities.find((x) => x.slug === b.dataset.open);
+      if (c) { location.hash = '#/overview'; selectCity(c); } else toast('Archived cities can’t be opened');
+    };
+    $('#cNew').onclick = () => {
+      const m = modal(`
+        <h2>Add a city</h2>
+        <div class="grid-2">
+          <label class="field"><span>Official name</span><input class="input" id="nName" placeholder="City of Poplarville"></label>
+          <label class="field"><span>State</span><input class="input" id="nState" maxlength="2" value="MS"></label>
+          <label class="field"><span>County</span><input class="input" id="nCounty" placeholder="Pearl River County"></label>
+          <label class="field"><span>Request prefix</span><input class="input" id="nPrefix" maxlength="5" placeholder="POP"></label>
+        </div>
+        <small class="faint">The city starts as Onboarding with default departments. Load its documents, fill in Settings, add its first administrator, then set it to Active.</small>
+        <div class="row"><button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="nSave">Add city</button></div>`);
+      m.querySelector('#nSave').onclick = async () => {
+        try {
+          const { city } = await api('/api/platform/cities', { method: 'POST', body: { name: m.querySelector('#nName').value, state: m.querySelector('#nState').value, county: m.querySelector('#nCounty').value, requestPrefix: m.querySelector('#nPrefix').value.toUpperCase() || undefined } });
+          m.remove(); toast(`${city.name} added`); renderPlatform(page);
+        } catch (e) { toast(e.message); }
+      };
     };
   }
 

@@ -5,13 +5,17 @@
 //   env.CITY_STORE  one database per city: knowledge base, conversations, requests, audit log
 import { chunkText, extractText, guessMime } from './ingest.js';
 import { search } from './search.js';
-import { buildUserMessage, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
+import { modelName } from './assistant.js';
+import { recordReply, respond, summarize } from './reply.js';
+import { phoneConfigured, phoneRoute } from './phone.js';
+import { afterHours } from './hours.js';
+import { remindStale, requestCreated, requestUpdated } from './alerts.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
 import { enabledForms, formList, permitRoute, sendPermitReminders, tokenFor } from './permits/routes.js';
-import { FORMS, detectForm } from './permits/forms/index.js';
+import { FORMS } from './permits/forms/index.js';
 import { residentRoute } from './residents.js';
 
 export { CityStore } from './store.js';
@@ -31,20 +35,9 @@ const uid = (p) => p + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 const now = () => new Date().toISOString();
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
-// Source numbers cited in an answer: [2], [2][3], and the occasional [2, 3] or [2-4].
-function citedNumbers(text) {
-  const out = new Set();
-  for (const [, inner] of text.matchAll(/\[(\d+(?:\s*[,–-]\s*\d+)*)\]/g)) {
-    for (const part of inner.split(',')) {
-      const [a, b] = part.split(/[–-]/).map((x) => Number(x.trim()));
-      for (let n = a; n <= (b || a) && n - a < 20; n++) out.add(n);
-    }
-  }
-  return out;
-}
-
 /* ---------------- Cities ---------------- */
 
+const DAILY_CRON = '0 15 * * *';
 const cityCache = new Map();
 
 function toCity(row) {
@@ -111,14 +104,21 @@ export default {
     }
   },
 
-  // Daily: remind applicants about unfinished permit applications and requested corrections.
+  // Daily at 15:00 UTC: remind applicants about unfinished permit applications and requested corrections.
+  // Hourly: remind staff about service requests nobody has picked up.
   async scheduled(event, env, ctx) {
     const { results } = await env.DB.prepare("SELECT * FROM cities WHERE status = 'active'").all();
     for (const row of results) {
       const city = toCity(row);
+      const store = storeFor(env, city);
       try {
-        const n = await sendPermitReminders(env, city, storeFor(env, city));
-        if (n) console.log(`${city.slug}: sent ${n} permit reminders`);
+        if (event.cron === DAILY_CRON) {
+          const n = await sendPermitReminders(env, city, store);
+          if (n) console.log(`${city.slug}: sent ${n} permit reminders`);
+        } else {
+          const n = await remindStale(env, city, store);
+          if (n) console.log(`${city.slug}: reminded staff about ${n} unassigned requests`);
+        }
       } catch (e) {
         console.log(`${city.slug}: reminders failed`, e.stack || e.message);
       }
@@ -152,11 +152,12 @@ async function route(request, env, ctx, url) {
   if (city.status !== 'suspended' || me) {
     if (res === 'config' && m === 'GET') return publicConfig(city, store);
     if (res === 'chat' && m === 'POST') return chat(request, env, ctx, city, store, me);
-    if (res === 'requests' && m === 'POST' && !id) return createRequest(request, env, city, store, me);
+    if (res === 'requests' && m === 'POST' && !id) return createRequest(request, env, ctx, city, store, me);
     if (res === 'track' && m === 'GET' && id) return trackRequest(store, id);
     if (res === 'forms' && m === 'GET') return json({ forms: formList(city) }, 200, { 'Cache-Control': 'public, max-age=300' });
     if (res === 'me') return residentRoute({ request, env, url, city, store, sub: id, tokenFor });
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
+    if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c), requestCreated });
     if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   }
 
@@ -173,6 +174,8 @@ async function route(request, env, ctx, url) {
     if (id && !sub && m === 'PATCH') { need('knowledge.edit'); return updateDocument(request, env, store, id, me); }
     if (id && !sub && m === 'DELETE') { need('knowledge.edit'); return deleteDocument(env, store, id, me); }
     if (id && sub === 'reprocess' && m === 'POST') { need('knowledge.edit'); return reprocessDocument(env, store, id, me); }
+    if (id && sub === 'verify' && m === 'POST') { need('knowledge.edit'); const doc = await store.verifyDocument(id, me.actor); return doc ? json({ document: doc }) : fail(404, 'Document not found'); }
+    if (id && sub === 'refresh' && m === 'POST') { need('knowledge.edit'); return refreshDocument(env, store, id, me); }
   }
   if (res === 'conversations') {
     if (!id && m === 'GET') { need('conversations.view'); return json({ conversations: await store.listConversations({ status: url.searchParams.get('status') }) }); }
@@ -182,10 +185,23 @@ async function route(request, env, ctx, url) {
   if (res === 'requests') {
     if (!id && m === 'GET') { need('requests.view'); return listRequests(store, me); }
     if (id && sub === 'photo' && m === 'GET') { need('requests.view'); return requestPhoto(env, store, id, me); }
-    if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, store, id, me); }
+    if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, env, ctx, city, store, id, me); }
   }
   if (res === 'permits') return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
+  if (res === 'departments' && (m === 'POST' || m === 'PUT')) { need('settings.edit'); return saveDepartment(request, store, id, me); }
+  if (res === 'request-types') {
+    if (m === 'GET') { need('requests.view'); return json({ requestTypes: await store.requestTypesAdmin() }); }
+    if (m === 'POST' || m === 'PUT') { need('settings.edit'); return saveRequestType(request, store, id, me); }
+  }
+  if (res === 'freshness' && m === 'GET') { need('knowledge.view'); return json(await store.freshness()); }
+  if (res === 'freshness' && m === 'POST') { need('knowledge.edit'); return json(await store.checkSources(10)); }
+  if (res === 'report' && m === 'GET') { need('report.view'); return report(env, city, store, url); }
+  if (res === 'channels' && m === 'GET') {
+    need('channels.view');
+    const base = `${url.origin}/api/${city.slug}/twilio`;
+    return json({ phone: phoneConfigured(env), smsUrl: `${base}/sms`, voiceUrl: `${base}/voice` });
+  }
   if (res === 'staff') {
     if (!id && m === 'GET') { need('requests.view'); return listStaff(env, city, store, me); }
     if (!id && m === 'POST') { need('staff.manage'); return addStaff(request, env, city, store, me, url); }
@@ -369,7 +385,9 @@ async function chat(request, env, ctx, city, store, me) {
   const body = await request.json().catch(() => ({}));
   const question = String(body.message || '').trim().slice(0, 1200);
   if (!question) return fail(400, 'Message is required');
-  const staff = me?.can('assistant.test') && body.mode === 'staff';
+  // Staff tests and evals stay out of the city's conversation log and results; only 'staff' mode reads staff-only documents.
+  const testing = me?.can('assistant.test') && ['staff', 'eval'].includes(body.mode);
+  const staff = testing && body.mode === 'staff';
 
   if (env.CHAT_LIMIT && !me) {
     const ip = request.headers.get('CF-Connecting-IP') || 'anon';
@@ -377,103 +395,23 @@ async function chat(request, env, ctx, city, store, me) {
     if (!success) return fail(429, 'Too many messages. Please wait a minute and try again.');
   }
 
-  const channel = staff ? 'staff-test' : ['voice', 'sms'].includes(body.channel) ? body.channel : 'web';
+  const channel = testing ? 'staff-test' : ['voice', 'sms'].includes(body.channel) ? body.channel : 'web';
   const { convoId, history } = await store.beginTurn({
     convoId: typeof body.convoId === 'string' && /^c[a-f0-9]{12}$/.test(body.convoId) ? body.convoId : null,
     channel, pageUrl: String(body.pageUrl || '').slice(0, 300) || null,
     contact: channel === 'web' ? null : String(body.from || '').slice(0, 40) || null, question,
   });
 
-  const s = city.settings;
   const enc = new TextEncoder();
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const send = (event, data) => writer.write(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
 
   const run = async () => {
-    let answer = '';
-    let sources = [];
-    let flags = { needsStaff: false, offerReport: false, emergency: false, offerForm: null };
-    let reportType = null;
-    try {
-      const emergency = isEmergency(question);
-      const type = emergency ? null : (await store.requestTypes()).find((t) => t.key === detectReport(question));
-      if (type) {
-        reportType = type.key;
-        flags.offerReport = true;
-        answer = `Thanks for letting us know. I can send this straight to **${type.department}** as a "${type.label.toLowerCase()}" request. ` +
-          `Tap **Report this issue** below to add the location and any details, and you'll get a tracking number.`;
-        await send('meta', { convoId, sources: [] });
-        await send('delta', { t: answer });
-      } else if (emergency) {
-        flags.emergency = true;
-        answer = `**If this is an emergency, call 911 now.** I'm an automated assistant and can't dispatch help.\n\n` +
-          (s.policeNonEmergency ? `For a non-emergency police matter, call ${s.shortName} Police at ${s.policeNonEmergency}. ` : '') +
-          (s.phone ? `For anything else, City Hall is at ${s.phone}.` : '');
-        await send('meta', { convoId, sources: [] });
-        await send('delta', { t: answer });
-      } else {
-        // Short follow-ups ("what about fences?") search better with the previous question attached.
-        const lastUser = [...history].reverse().find((h) => h.role === 'user');
-        const q = question.split(/\s+/).length < 6 && lastUser ? `${lastUser.content} ${question}` : question;
-        const hits = await search(env, store, s, q, { includeInternal: staff, limit: 6 });
-        const online = formList(city);
-        const formOf = (url) => online.find((x) => url && x.formUrls.includes(url))?.kind || null;
-        sources = [
-          { n: 1, title: 'City Hall contact information', category: 'City profile', url: s.website || null, as_of: 'current', authority: 'staff-note' },
-          ...hits.map((h, i) => ({
-            n: i + 2, docId: h.doc.id, title: h.doc.title, heading: h.heading, category: h.doc.category,
-            url: h.doc.source_url || (h.doc.file_key ? `/api/${city.slug}/documents/${h.doc.id}/file` : null),
-            as_of: h.doc.as_of, authority: h.doc.authority, verification: h.doc.verification, visibility: h.doc.visibility, form: formOf(h.doc.source_url),
-            ...(staff ? { score: Math.round(h.score * 1000) / 1000, excerpt: h.text.slice(0, 400) } : {}),
-          })),
-        ];
-        await send('meta', { convoId, sources });
-        const messages = [
-          ...history.map((h) => ({ role: h.role, content: h.content })),
-          { role: 'user', content: buildUserMessage(s, question, hits) },
-        ];
-        const filter = tokenFilter();
-        for await (const piece of generate(env, systemPrompt(s, online), messages)) {
-          const out = filter.push(piece);
-          if (out) { answer += out; await send('delta', { t: out }); }
-        }
-        const tail = filter.end();
-        if (tail) { answer += tail; await send('delta', { t: tail }); }
-        flags = { ...flags, ...filter.flags };
-        // A well-sourced answer doesn't need a staff follow-up even if the model asked for one.
-        if ([...citedNumbers(answer)].filter((n) => n > 1).length >= 2) flags.needsStaff = false;
-        if (!citedNumbers(answer).size && !flags.offerReport) flags.needsStaff = true;
-      }
-    } catch (e) {
-      console.log('chat error', e.stack || e.message);
-      flags.needsStaff = true;
-      const msg = `Sorry, I had trouble answering just now. Please try again${s.phone ? `, or call City Hall at ${s.phone}` : ''}.`;
-      answer += (answer ? '\n\n' : '') + msg;
-      await send('delta', { t: msg }).catch(() => {});
-    }
-
-    const cited = citedNumbers(answer);
-    // Offer the online application the resident needs: what they asked for, or the city form the answer cites.
-    if (!flags.emergency && !reportType) {
-      const kinds = enabledForms(city).map((x) => x.kind);
-      const asked = detectForm(question);
-      const citedForm = sources.find((x) => cited.has(x.n) && x.form)?.form;
-      flags.offerForm = [flags.formToken, asked, citedForm].find((k) => k && kinds.includes(k)) || null;
-    }
-    delete flags.formToken;
-    const used = sources.filter((x) => cited.has(x.n));
-    await send('done', { convoId, flags, cited: [...cited], reportType }).catch(() => {});
+    const r = await respond(env, city, store, { convoId, question, history, includeInternal: staff, channel, send });
+    await send('done', { convoId, flags: r.flags, cited: [...r.cited], reportType: r.reportType }).catch(() => {});
     await writer.close().catch(() => {});
-
-    await store.finishTurn({
-      convoId, answer,
-      sources: (used.length ? used : sources.slice(0, 3)).map(({ score, excerpt, ...x }) => x),
-      flag: flags.emergency ? 'emergency' : flags.needsStaff ? 'needs_staff' : flags.offerReport ? 'report' : null,
-      model: flags.emergency || reportType ? 'rule' : modelName(env),
-      status: flags.emergency ? 'emergency' : flags.needsStaff ? 'needs_review' : null,
-      citedDocIds: used.filter((u) => u.docId).map((u) => u.docId),
-    });
+    await recordReply(env, store, convoId, r);
   };
   ctx.waitUntil(run());
   return new Response(readable, {
@@ -585,6 +523,21 @@ async function deleteDocument(env, store, id, me) {
   return json({ ok: true });
 }
 
+// Re-imports a web page or online file from its original address, replacing the stored text.
+async function refreshDocument(env, store, id, me) {
+  const doc = await store.documentRow(id);
+  if (!doc?.source_url || !/^https?:\/\//.test(doc.source_url)) return fail(400, 'This document has no web address to re-import from');
+  const r = await fetch(doc.source_url, { headers: { 'User-Agent': 'CityHallOS knowledge import' }, redirect: 'follow' });
+  if (!r.ok) return fail(400, `Could not fetch the source (${r.status})`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const mime = (r.headers.get('Content-Type') || doc.mime || 'text/html').split(';')[0];
+  const name = doc.file_name || (mime.includes('html') ? 'page.html' : 'file');
+  if (doc.file_key) await env.FILES.put(doc.file_key, bytes, { httpMetadata: { contentType: mime } });
+  const updated = await processDocument(env, store, { ...doc, mime, file_name: name }, null, bytes, me, 'Re-imported from its source');
+  if (updated.status === 'ready') await store.clearSourceChange(id);
+  return json({ document: updated });
+}
+
 async function reprocessDocument(env, store, id, me) {
   const doc = await store.documentRow(id);
   if (!doc?.file_key) return fail(400, 'This document has no file to reprocess');
@@ -632,15 +585,11 @@ async function updateConversation(request, store, id, me) {
 
 const REQUEST_STATUSES = ['new', 'needs_info', 'assigned', 'in_progress', 'awaiting_review', 'resolved', 'closed'];
 
-function summarize(label, location, description) {
-  const text = description.split(/\n+/).map((p) => p.trim().replace(/[.!?]?$/, '.')).join(' ');
-  return `${label}${location ? ` at ${location}` : ''}. ${text.length > 200 ? text.slice(0, 197) + '…' : text}`;
-}
 
 // Resident contact details are only shown to roles that work requests.
 const redact = (r, me) => (me.can('residents.contact') ? r : { ...r, name: r.name ? 'Hidden' : null, contact: r.contact ? 'Hidden' : null });
 
-async function createRequest(request, env, city, store, me) {
+async function createRequest(request, env, ctx, city, store, me) {
   const ct = request.headers.get('Content-Type') || '';
   let b; let photo = null;
   if (ct.includes('multipart/form-data')) {
@@ -669,6 +618,7 @@ async function createRequest(request, env, city, store, me) {
     await env.FILES.put(key, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
     await store.setRequestPhoto(created.id, key);
   }
+  ctx.waitUntil(requestCreated(env, city, store, created.id).catch((e) => console.log('request alerts failed', e.message)));
   return json({ ref: created.ref, department: created.department, status: 'new' }, 201);
 }
 
@@ -687,7 +637,7 @@ async function listRequests(store, me) {
   return json({ requests: requests.map((r) => redact(r, me)) });
 }
 
-async function updateRequest(request, store, id, me) {
+async function updateRequest(request, env, ctx, city, store, id, me) {
   const r = await store.getRequest(Number(id));
   if (!r) return fail(404, 'Request not found');
   if (me.departmentId && r.department_id !== me.departmentId) return fail(403, 'This request belongs to another department');
@@ -699,7 +649,9 @@ async function updateRequest(request, store, id, me) {
   if (b.department_id) patch.department_id = clean(b.department_id, 60);
   if (b.note) patch.note = clean(b.note, 1000);
   try {
-    return json({ request: redact(await store.updateRequest(Number(id), patch, me.actor), me) });
+    const after = await store.updateRequest(Number(id), patch, me.actor);
+    ctx.waitUntil(requestUpdated(env, city, store, r, after).catch((e) => console.log('resident update failed', e.message)));
+    return json({ request: redact(after, me) });
   } catch (e) {
     return fail(400, e.message);
   }
@@ -735,7 +687,7 @@ async function listStaff(env, city, store, me) {
 function staffInput(b) {
   return {
     name: clean(b.name, 120), title: clean(b.title, 120), department_id: clean(b.department_id, 60),
-    email: clean(b.email, 200)?.toLowerCase() ?? null, phone: clean(b.phone, 40),
+    email: clean(b.email, 200)?.toLowerCase() ?? null, phone: clean(b.phone, 40), notify_pref: b.notify_pref === 'sms' ? 'sms' : 'email',
   };
 }
 
@@ -819,6 +771,61 @@ async function newSetupLink(env, city, store, id, me, url) {
   return json({ setupUrl: `${url.origin}/#/setup/${token}` });
 }
 
+/* ---------------- City setup ---------------- */
+
+async function saveDepartment(request, store, id, me) {
+  const b = await request.json();
+  const d = { id: id || undefined };
+  if ('name' in b) d.name = clean(b.name, 80);
+  if ('phone' in b) d.phone = clean(b.phone, 40);
+  if ('email' in b) d.email = clean(b.email, 200);
+  if ('active' in b) d.active = b.active ? 1 : 0;
+  if (!id && !d.name) return fail(400, 'Enter a department name');
+  try {
+    return json({ departments: await store.saveDepartment(d, me.actor) });
+  } catch (e) {
+    return fail(400, e.message);
+  }
+}
+
+async function saveRequestType(request, store, key, me) {
+  const b = await request.json();
+  const t = { key: key || undefined };
+  if ('label' in b) t.label = clean(b.label, 80);
+  if ('department_id' in b) t.department_id = clean(b.department_id, 60);
+  if ('priority' in b) t.priority = b.priority;
+  if ('active' in b) t.active = b.active ? 1 : 0;
+  if ('default_assignee_id' in b) t.default_assignee_id = clean(b.default_assignee_id, 20);
+  for (const k of ['notify_staff', 'after_hours_staff']) if (Array.isArray(b[k])) t[k] = b[k].map((x) => clean(x, 20)).filter(Boolean).slice(0, 10);
+  if (!key && (!t.label || !t.department_id)) return fail(400, 'Enter a name and choose a department');
+  try {
+    return json({ requestTypes: await store.saveRequestType(t, me.actor) });
+  } catch (e) {
+    return fail(400, e.message);
+  }
+}
+
+
+async function report(env, city, store, url) {
+  const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 730);
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const r = await store.report({ since, tzModifier: tzModifier(city.timezone) });
+  const s = city.settings;
+  const selfServed = r.answers.total - r.answers.needs_staff - r.answers.emergencies;
+  const minutesPerCall = Number(s.minutesPerCall) || 4;
+  return json({
+    days, since, ...r,
+    impact: {
+      selfServed,
+      selfServedRate: r.answers.total ? selfServed / r.answers.total : null,
+      minutesPerCall,
+      staffHoursSaved: (selfServed * minutesPerCall) / 60,
+      baselineCallsPerWeek: Number(s.baselineCallsPerWeek) || null,
+      questionsPerWeek: r.questions / (days / 7),
+    },
+  });
+}
+
 /* ---------------- Overview & settings ---------------- */
 
 async function overview(env, city, store) {
@@ -827,7 +834,7 @@ async function overview(env, city, store) {
 }
 
 const EDITABLE_SETTINGS = ['shortName', 'assistantName', 'tagline', 'greeting', 'brandColor', 'suggestions', 'phone', 'address', 'hours', 'website',
-  'publicSite', 'policeNonEmergency', 'profileNotes', 'disambiguation'];
+  'publicSite', 'policeNonEmergency', 'profileNotes', 'disambiguation', 'openTime', 'closeTime', 'openDays', 'minutesPerCall', 'baselineCallsPerWeek'];
 
 async function saveSettings(request, env, city, store, me) {
   const b = await request.json();
@@ -836,8 +843,12 @@ async function saveSettings(request, env, city, store, me) {
   const changes = {};
   for (const k of EDITABLE_SETTINGS) {
     if (!(k in b)) continue;
-    const v = k === 'suggestions' ? (Array.isArray(b[k]) ? b[k].map((x) => clean(x, 100)).filter(Boolean).slice(0, 6) : []) : clean(b[k], 1200) ?? '';
+    const v = k === 'suggestions' ? (Array.isArray(b[k]) ? b[k].map((x) => clean(x, 100)).filter(Boolean).slice(0, 6) : [])
+      : k === 'openDays' ? (Array.isArray(b[k]) ? [...new Set(b[k].map(Number).filter((d) => d >= 0 && d <= 6))].sort() : [1, 2, 3, 4, 5])
+      : clean(b[k], 1200) ?? '';
     if ((k === 'brandColor' && !/^#[0-9a-f]{6}$/i.test(v)) || (k === 'shortName' && !v)) continue;
+    if (['openTime', 'closeTime'].includes(k) && !/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) continue;
+    if (['minutesPerCall', 'baselineCallsPerWeek'].includes(k) && v !== '' && !(Number(v) >= 0)) continue;
     if (JSON.stringify(city.settings[k] ?? '') !== JSON.stringify(v)) changes[k] = [city.settings[k] ?? null, v];
     stored[k] = v;
   }

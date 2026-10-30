@@ -94,11 +94,23 @@ npm run dev             # start the local server on port 8787
 npm test                # run the end-to-end checks against the local server
 npm run deploy:staging  # deploy to staging, then: npm run test:staging
 npm run deploy          # deploy to production
+npm run eval            # grade the assistant's answers against evals/wiggins.json (uses the AI model)
 ```
 
 After a reset, sign in locally as `DEV_ADMIN_EMAIL` with `DEV_ADMIN_PASSWORD` from `platform/.dev.vars`
 (copy `.dev.vars.example` the first time). The test suite creates throwaway cities, archives them afterward and
 refuses to run against production.
+
+### Connecting text messages and calls
+
+1. In Twilio, buy a local number for the city.
+2. Set the number's **A message comes in** webhook to `https://app.cityhallos.com/api/<city>/twilio/sms` and
+   **A call comes in** to `https://app.cityhallos.com/api/<city>/twilio/voice` (HTTP POST). The dashboard's Channels
+   page shows both addresses.
+3. Once for the platform: `npx wrangler secret put TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM`
+   (from `platform/`). Without `TWILIO_AUTH_TOKEN` the webhooks refuse traffic.
+
+Locally, `TWILIO_ALLOW_UNSIGNED=1` in `.dev.vars` lets you post test texts and calls without Twilio.
 
 ### Loading a city's knowledge
 

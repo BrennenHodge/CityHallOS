@@ -34,8 +34,9 @@
     { "name": "LOGIN_LIMIT", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }
   ],
   "routes": [{ "pattern": "app.cityhallos.com", "custom_domain": true }],
-  // Daily permit reminders at 15:00 UTC (9 or 10 am Central). Links in those messages use APP_ORIGIN.
-  "triggers": { "crons": ["0 15 * * *"] },
+  // Daily permit reminders at 15:00 UTC (9 or 10 am Central) and hourly reminders about unassigned requests.
+  // Links in those messages use APP_ORIGIN.
+  "triggers": { "crons": ["0 15 * * *", "30 * * * *"] },
   "vars": { "APP_ORIGIN": "https://app.cityhallos.com" },
 
   // Staging: the same code at staging.cityhallos.com with its own database, files and city stores.
