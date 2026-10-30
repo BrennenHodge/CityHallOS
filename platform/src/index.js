@@ -18,6 +18,7 @@ import {
 } from './auth.js';
 import { permitRoute, sendPermitReminders } from './permits/routes.js';
 import { DISPATCH_RESOURCES, afterRequestCreated, dispatchRoute } from './dispatch.js';
+import { isLicenseQuestion, licensingDaily, licensingSources, publicLicensing, staffLicensing } from './licensing.js';
 
 export { CityStore } from './store.js';
 export { AuthService } from './auth.js';
@@ -107,7 +108,8 @@ export default {
     }
   },
 
-  // Daily at 15:00 UTC: remind applicants about unfinished permit applications and requested corrections.
+  // Daily at 15:00 UTC: remind applicants about unfinished permit applications and requested corrections, and send
+  // business license renewal notices.
   // Hourly: remind staff about service requests nobody has picked up.
   async scheduled(event, env, ctx) {
     const { results } = await env.DB.prepare("SELECT * FROM cities WHERE status = 'active'").all();
@@ -125,6 +127,9 @@ export default {
       } catch (e) {
         console.log(`${city.slug}: reminders failed`, e.stack || e.message);
       }
+    }
+    if (event.cron === DAILY_CRON) {
+      ctx.waitUntil(licensingDaily(env, results.map((r) => { const city = toCity(r); return { city, store: storeFor(env, city) }; })));
     }
   },
 };
@@ -162,6 +167,7 @@ async function route(request, env, ctx, url) {
     if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c), requestCreated });
     if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
     if (res === 'records') { const out = await recordsPublic(request, env, ctx, city, store, me, parts, url); if (out) return out; }
+    if (res === 'licenses') { const r = await publicLicensing({ request, env, city, store, me, url, path: parts.slice(2), m }); if (r) return r; }
   }
 
   // Meetings: public agendas and minutes, and the staff tools. meetings.js checks permissions itself.
@@ -195,6 +201,7 @@ async function route(request, env, ctx, url) {
   }
   if (res === 'permits') return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   if (res === 'records') return recordsStaff(request, env, ctx, city, store, me, need, parts, url);
+  if (res === 'licenses') return staffLicensing({ request, env, city, store, me, need, url, path: parts.slice(2), m });
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
   if (res === 'departments' && (m === 'POST' || m === 'PUT')) { need('settings.edit'); return saveDepartment(request, store, id, me); }
   if (res === 'request-types') {
@@ -239,7 +246,7 @@ async function publicConfig(city, store) {
     brandColor: s.brandColor, suggestions: s.suggestions, phone: s.phone, policeNonEmergency: s.policeNonEmergency,
     requestTypes: (await store.requestTypes()).map(({ key, label }) => ({ key, label })),
     permits: s.permits?.construction?.enabled !== false,
-    modules: ['records'], // chat add-ons the widget loads: /embed-{name}.js
+    modules: ['records', 'licensing'], // chat add-ons the widget loads: /embed-{name}.js
   }, 200, { 'Cache-Control': 'public, max-age=60' });
 }
 

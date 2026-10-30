@@ -211,3 +211,35 @@ curl -X POST https://app.cityhallos.com/api/platform/cities \
 This creates the city as `onboarding` with default departments and request types. Then load its knowledge
 (`scripts/crawl.py`, `scripts/seed.py`), fill in Settings, add its first administrator under Staff & access, and
 set the status to `active` with `PUT /api/platform/cities/{slug}/status`.
+
+## Business licenses
+
+City business (privilege) licenses under Miss. Code Ann. § 27-17 (the sections are cited in `src/licensing-rules.js`).
+
+| Piece | Where |
+|---|---|
+| Rules: fees by class and employees, license periods, proration, late penalties, renewal-notice dates | `src/licensing-rules.js` |
+| Records in each city's store: `license_settings`, `license_applications`, `license_events`, `licenses` | `src/licensing-store.js` (mixed into `CityStore`) |
+| API under `/api/{city}/licenses`, guided intake, certificate PDF, renewal notices | `src/licensing.js` |
+| Chat and portal add-on | `public/embed-licensing.js` (loaded by `embed.js` from `/config` `modules`) |
+| Staff page: review queue, registry, settings | `public/licensing.js` (registers with `window.CHOS`) |
+| Public lookup and application tracking | `public/licenses.html?city={slug}&ref={ref}` |
+
+License classes, fees, the term and the wording are each city's own settings, edited under Business licenses > Settings.
+The § 27-17-9 schedule is offered as a template. The AI collects the application and explains the rules; staff review,
+assess the fee, take payment and issue or deny. Applications are numbered `{prefix}-BL-1001`, licenses `{prefix}-LIC-1001`.
+A daily cron sends renewal notices from the first day of the month before a license expires (§ 27-17-465).
+
+Permissions: `licenses.view` (every role), `licenses.manage` (administrators, and department staff of the licensing
+department, City Hall unless the city sets another), `licenses.settings` (administrators).
+
+## Online payments
+
+`src/payments.js` charges and refunds cards for anything a resident pays for online. No processor is connected yet, so
+the `test` provider is the only one: it accepts the standard test cards (4242 4242 4242 4242), declines the standard
+decline cards, and refuses every other number, so no real card is ever reported as charged. Card numbers are never stored
+or logged; only the last four digits, the brand and the payment id are kept. Stripe goes in as another provider there.
+
+Online payment is offered only where `PAYMENTS_PROVIDER` is set: `test` locally (`.dev.vars`) and on staging. Production
+has none until a real processor is connected, so residents are told to pay at City Hall and staff record cash and check
+payments.

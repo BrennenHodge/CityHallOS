@@ -12,3 +12,7 @@
 /permit.js
   Cache-Control: public, max-age=300
   Access-Control-Allow-Origin: *
+
+/embed-*.js
+  Cache-Control: public, max-age=300
+  Access-Control-Allow-Origin: *

@@ -1470,7 +1470,7 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
 
   /* ---------------- Activity (audit log) ---------------- */
 
-  const AUDIT_TYPES = [['', 'All'], ['document', 'Knowledge base'], ['request', 'Requests'], ['records_request', 'Public records'], ['staff', 'Staff & access'], ['conversation', 'Conversations'], ['settings', 'Settings'], ['city', 'City']];
+  const AUDIT_TYPES = [['', 'All'], ['document', 'Knowledge base'], ['request', 'Requests'], ['records_request', 'Public records'], ['license', 'Licenses'], ['staff', 'Staff & access'], ['conversation', 'Conversations'], ['settings', 'Settings'], ['city', 'City']];
 
   async function renderActivity(page, append = false) {
     state.auditType ??= '';

@@ -2,6 +2,7 @@
 import { search } from './search.js';
 import { buildUserMessage, detectPermit, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
 import { recordsIntro, wantsRecords } from './records.js';
+import { isLicenseQuestion, licensingSources } from './licensing.js';
 
 // A one-line summary staff see on a request card.
 export function summarize(label, location, description) {
@@ -27,7 +28,7 @@ export async function respond(env, city, store, { convoId, question, history = [
   const emit = async (event, data) => { if (send) await send(event, data); };
   let answer = '';
   let sources = [];
-  let flags = { needsStaff: false, offerReport: false, emergency: false, offerPermit: false, offerRecords: false };
+  let flags = { needsStaff: false, offerReport: false, emergency: false, offerPermit: false, offerRecords: false, offerLicense: false };
   let reportType = null;
   let type = null;
   try {
@@ -61,7 +62,10 @@ export async function respond(env, city, store, { convoId, question, history = [
       // Short follow-ups ("what about fences?") search better with the previous question attached.
       const lastUser = [...history].reverse().find((h) => h.role === 'user');
       const q = question.split(/\s+/).length < 6 && lastUser ? `${lastUser.content} ${question}` : question;
-      const hits = await search(env, store, s, q, { includeInternal, limit: 6 });
+      // Business license questions also get the city's license classes, fees and rules (licensing.js) as a source.
+      flags.offerLicense = isLicenseQuestion(q);
+      const hits = [...(flags.offerLicense ? await licensingSources(store, city, env.APP_ORIGIN || 'https://app.cityhallos.com') : []),
+        ...(await search(env, store, s, q, { includeInternal, limit: 6 }))];
       sources = [
         { n: 1, title: 'City Hall contact information', category: 'City profile', url: s.website || null, as_of: 'current', authority: 'staff-note' },
         ...hits.map((h, i) => ({
