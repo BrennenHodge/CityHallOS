@@ -19,6 +19,7 @@ import { matches } from './engine.js';
 import { FORMS, detectForm, formFor } from './forms/index.js';
 import { looksLikeQuestion, quickParse, readMessage } from './converse.js';
 import { screenAddress, screenSummary } from './screen.js';
+import { placeDetails, suggestAddresses } from './address.js';
 import { applicationPdf, issuedPdf } from './pdf.js';
 
 const CORS = { 'Access-Control-Allow-Origin': '*' };
@@ -88,7 +89,16 @@ function fromProfile(form, data, profile) {
   return out;
 }
 
-async function saveAnswers(env, store, city, p, updates, { profile } = {}) {
+// place: the address suggestion the resident picked ({ placeId, session } from Google, or { lat, lon }), so the
+// screen can place it on the map even when the Census geocoder can't match the address as written.
+async function pickedPlace(env, place, address) {
+  if (!place || typeof place !== 'object') return null;
+  if (place.placeId) return placeDetails(env, String(place.placeId), place.session ? String(place.session).slice(0, 64) : null);
+  const lat = Number(place.lat); const lon = Number(place.lon);
+  return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat, lon, address } : null;
+}
+
+async function saveAnswers(env, store, city, p, updates, { profile, place } = {}) {
   const form = formFor(p.kind);
   const addrKey = form.addressField;
   let data = { ...p.data };
@@ -101,7 +111,7 @@ async function saveAnswers(env, store, city, p, updates, { profile } = {}) {
   if (data.owner_same_mailing === false && p.data.owner_same_mailing === true) for (const k of ['owner_address', 'owner_city', 'owner_state', 'owner_zip']) delete data[k];
   let screen = p.screen;
   if (addrKey && data[addrKey] && data[addrKey] !== p.data[addrKey]) {
-    screen = await screenAddress(data[addrKey], city);
+    screen = await screenAddress(data[addrKey], city, await pickedPlace(env, place, data[addrKey]));
     if (screen.matchedAddress && data.owner_same_mailing) for (const k of ['owner_address', 'owner_city', 'owner_state', 'owner_zip']) delete data[k];
   }
   if (!addrKey || !data[addrKey]) screen = null;
@@ -313,6 +323,8 @@ export async function permitRoute({ request, env, ctx, url, city, store, me, par
     return json({ ...form.publicSchema(), enabled: cfg.enabled !== false, payment: cfg.paymentInstructions || null, feeSource: cfg.fees?.source || null }, 200, { 'Cache-Control': 'public, max-age=300' });
   }
   if (id === 'forms' && m === 'GET') return json({ forms: formList(city) }, 200, { 'Cache-Control': 'public, max-age=300' });
+  // Address suggestions as the resident types, centered on City Hall.
+  if (id === 'address' && m === 'GET') return json(await suggestAddresses(env, city, url.searchParams.get('q'), url.searchParams.get('session')), 200, { 'Cache-Control': 'private, max-age=60' });
   if (!id && m === 'GET' && !me) return fail(401, 'Please sign in');
 
   // Start an application. An opening message ("a 24x30 garage behind my house") is read right away.
@@ -465,8 +477,8 @@ async function applicantRoute({ request, env, ctx, city, store, p, sub, subId, m
     if ('applicant_note' in (b.data || {})) updates.applicant_note = String(b.data.applicant_note || '').slice(0, 1000) || null;
     const addr = form.addressField;
     const before = addr && p.data[addr];
-    const q = await saveAnswers(env, store, city, p, updates, { profile: resident });
-    return view(q, { screenNote: addr && q.data[addr] !== before && q.screen ? screenSummary(q.screen, city) : null, changed: Object.keys(q.data).filter((k) => JSON.stringify(q.data[k]) !== JSON.stringify(p.data[k]) && !(k in updates)) });
+    const q = await saveAnswers(env, store, city, p, updates, { profile: resident, place: b.place });
+    return view(q, { screenNote: addr && q.data[addr] !== before && q.screen ? screenSummary(q.screen, city) || null : null, changed: Object.keys(q.data).filter((k) => JSON.stringify(q.data[k]) !== JSON.stringify(p.data[k]) && !(k in updates)) });
   }
 
   // One chat message: read it into answers (or answer the resident's question), then ask the next question.
@@ -493,6 +505,9 @@ async function applicantRoute({ request, env, ctx, city, store, p, sub, subId, m
         updates = quickParse(form, ask, c ? c[1] : String(b.choice), p.data);
         for (const [k, v] of Object.entries(updates)) { if (v !== null && form.FIELDS[k]) { const cv = form.coerce(k, v); if (cv === undefined) delete updates[k]; else updates[k] = cv; } }
       }
+    } else if (text && b.place && form.addressField && ask?.fields?.includes(form.addressField)) {
+      // An address picked from the suggestions is taken exactly as shown.
+      updates = { [form.addressField]: text.slice(0, 200) };
     } else if (text) {
       // Questions are answered from the field explanations and the city's own documents.
       const sources = looksLikeQuestion(text) ? await search(env, store, city.settings, `${form.short} ${text}`, { limit: 4 }).catch(() => []) : [];
@@ -505,13 +520,14 @@ async function applicantRoute({ request, env, ctx, city, store, p, sub, subId, m
     if (ask && (ask.optional || ask.upload) && Object.keys(updates).length && !asked.includes(ask.id)) asked.push(ask.id);
     const addr = form.addressField;
     const before = addr && p.data[addr];
-    let q = await saveAnswers(env, store, city, { ...p, asked }, updates, { profile: resident });
+    let q = await saveAnswers(env, store, city, { ...p, asked }, updates, { profile: resident, place: b.place });
     if (JSON.stringify(asked) !== JSON.stringify(p.asked || [])) q = await store.savePermit(p.id, { asked });
     const lines = [];
-    const ack = b.choice ? null : ackFor(form, updates, reply);
+    const screenNote = addr && q.data[addr] !== before && q.screen ? screenSummary(q.screen, city) || null : null;
+    // The address screen confirms the address itself, so it needs no separate "Got it".
+    const ack = b.choice || (screenNote && Object.keys(updates).every((k) => k === addr)) ? null : ackFor(form, updates, reply);
     if (ack) lines.push(ack);
     else if (!understood) lines.push("Sorry, I didn't catch that. You can answer in your own words, or ask me what anything means.");
-    if (addr && q.data[addr] !== before && q.screen) lines.push(screenSummary(q.screen, city));
     const fee = form.feeEstimate(q.data, config(city, p.kind));
     const feeField = Object.keys(updates).some((k) => ['money', 'number'].includes(form.FIELDS[k]?.type));
     if (fee && fee.total > 0 && feeField && fee.total !== form.feeEstimate(p.data, config(city, p.kind))?.total) lines.push(`Based on the published fee schedule, the fee would be about **${money(fee.total)}**. City Hall confirms the final amount.`);
@@ -520,7 +536,7 @@ async function applicantRoute({ request, env, ctx, city, store, p, sub, subId, m
     // Asking for a different application ("I need a construction permit instead") offers to start it.
     const other = text && !Object.keys(updates).length ? detectForm(text) : null;
     const suggest = other && other !== p.kind && config(city, other).enabled !== false ? { kind: other, title: formFor(other).title } : null;
-    return view(q, { reply: lines.join('\n\n'), changed: Object.keys(updates), question, suggest });
+    return view(q, { reply: lines.join('\n\n'), screenNote, changed: Object.keys(updates), question, suggest });
   }
 
   if (sub === 'files' && !subId && m === 'POST') {

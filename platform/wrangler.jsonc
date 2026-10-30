@@ -3,6 +3,7 @@
   //   npx wrangler deploy
   // Secrets: ADMIN_KEY (City Hall OS operator access code), ANTHROPIC_API_KEY (optional; uses Claude instead of Workers AI).
 // Optional, for messages to residents: RESEND_API_KEY + NOTIFY_FROM_EMAIL (email), TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_FROM (texts and calls).
+// Optional, for Google address suggestions in applications: GOOGLE_MAPS_API_KEY (Places API (New)). Without it, suggestions come from Census street names.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "cityhallos-platform",
   "account_id": "d06c70a0b6279642a6243926161f574b",

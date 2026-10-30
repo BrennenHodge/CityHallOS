@@ -69,6 +69,16 @@
   .fld.flash { background: color-mix(in srgb, var(--brand) 10%, #fff); box-shadow: 0 0 0 6px color-mix(in srgb, var(--brand) 10%, #fff); }
   .fld .money { position: relative; } .fld .money span { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--muted); }
   .fld .money input { padding-left: 22px; }
+  .addr { position: relative; }
+  .composer { position: relative; }
+  .addr-sug { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 34px rgba(11,19,36,.16); overflow: hidden; }
+  .composer .addr-sug { top: auto; bottom: calc(100% + 6px); left: 10px; right: 10px; }
+  .addr-sug button { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; padding: 9px 12px; border: 0; background: none; cursor: pointer; font-size: 14px; color: var(--ink); }
+  .addr-sug button svg { flex: none; margin-top: 2px; color: var(--muted); }
+  .addr-sug button.on, .addr-sug button:hover { background: var(--soft); }
+  .addr-sug button small { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .addr-sug .note { padding: 7px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); background: var(--paper); }
+  .addr-ok { color: #0f7a55 !important; display: flex; gap: 5px; align-items: center; }
   .seg { display: flex; flex-wrap: wrap; gap: 6px; }
   .seg button { border: 1px solid var(--line); background: var(--paper); border-radius: 10px; padding: 7px 11px; cursor: pointer; font-size: 13.5px; font-weight: 550; }
   .seg button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
@@ -148,7 +158,7 @@
       get(k) { try { return JSON.parse(localStorage.getItem(LS + k)); } catch { return null; } },
       set(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
     };
-    const S = { showErrors: false, id: o.permit?.id || null, token: o.permit?.token || null, kind: o.kind || 'construction', app: null, schema: null, msgs: [], busy: false, tab: 'chat', pending: {}, saveTimer: 0, savedAt: null, saving: false, reviewing: false, closed: false, poll: 0, signIn: null };
+    const S = { showErrors: false, id: o.permit?.id || null, token: o.permit?.token || null, kind: o.kind || 'construction', app: null, schema: null, msgs: [], busy: false, tab: 'chat', pending: {}, typed: {}, place: null, drawing: false, saveTimer: 0, savedAt: null, saving: false, reviewing: false, closed: false, poll: 0, signIn: null };
     const $ = (s) => root.querySelector(s);
     const link = () => `${o.origin}/${city}/#permit=${S.id}.${S.token}`;
     let STATUS = {};
@@ -213,15 +223,33 @@
       $('#pLater').onclick = finishLater;
       root.querySelectorAll('.ws-tabs button').forEach((b) => { b.onclick = () => setTab(b.dataset.tab); });
       const input = $('#pInput');
-      input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(120, input.scrollHeight)}px`; });
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#pForm').requestSubmit(); } });
-      $('#pForm').onsubmit = (e) => { e.preventDefault(); const v = input.value.trim(); if (!v || S.busy) return; input.value = ''; input.style.height = ''; send({ text: v }); };
+      input.addEventListener('input', () => {
+        input.style.height = 'auto'; input.style.height = `${Math.min(120, input.scrollHeight)}px`;
+        // While the chat is asking for the property address, suggest addresses as they type.
+        if (S.app?.editable && S.app.ask?.fields?.includes(S.schema.addressField)) addrSuggest(input, (text, place) => { input.value = ''; input.style.height = ''; me(text); send({ text, place }, true); });
+        else if (A.input === input) addrClose();
+      });
+      input.addEventListener('keydown', (e) => {
+        if (A.input === input && addrKey(e)) return;
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#pForm').requestSubmit(); }
+      });
+      input.addEventListener('blur', () => { if (A.input === input) addrClose(); });
+      $('#pForm').onsubmit = (e) => { e.preventDefault(); addrClose(); const v = input.value.trim(); if (!v || S.busy) return; input.value = ''; input.style.height = ''; send({ text: v }); };
       $('#pLog').addEventListener('click', onChatClick);
       const sheet = $('#pSheet');
       sheet.addEventListener('input', onFieldInput);
       sheet.addEventListener('change', onFieldChange);
       sheet.addEventListener('click', onSheetClick);
-      sheet.addEventListener('focusout', (e) => { if (e.target.dataset?.key) flush(); });
+      sheet.addEventListener('keydown', (e) => {
+        if (!e.target.dataset?.addr) return;
+        if (A.input === e.target && addrKey(e)) return;
+        if (e.key === 'Enter') { e.preventDefault(); addrClose(); addrCommit(e.target); }
+      });
+      sheet.addEventListener('focusout', (e) => {
+        if (S.drawing || !e.target.dataset?.key) return;
+        if (e.target.dataset.addr) { addrClose(); addrCommit(e.target); return; }
+        flush();
+      });
       setTab(S.tab);
     }
 
@@ -295,6 +323,7 @@
         S.msgs.pop();
         setApp(v, v.changed);
         if (v.reply) say(v.reply, v.suggest ? { suggest: v.suggest } : {});
+        if (v.screenNote) sayScreen(v.screenNote);
         askMsg(v.ask);
       } catch (err) {
         S.msgs.pop(); say(err.message);
@@ -307,7 +336,7 @@
 
     const fieldLabel = (k) => S.schema.sections.flatMap((x) => x.fields).find((f) => f.key === k)?.label || k;
     const kindLabel = (k) => (S.schema?.docKinds.find(([v]) => v === k) || [])[1] || k;
-    const val = (k) => (k in S.pending ? S.pending[k] : S.app.data[k]);
+    const val = (k) => (k in S.typed ? S.typed[k] : k in S.pending ? S.pending[k] : S.app.data[k]);
     function shown(f) {
       if (!f.when) return true;
       return Object.entries(f.when).every(([k, v]) => {
@@ -350,11 +379,20 @@
         case 'number': input = `<input id="${id}" type="number" inputmode="decimal" min="0" step="any" data-key="${f.key}" value="${v ?? ''}" ${dis}>`; break;
         case 'signature': input = `<div class="sig"><input id="${id}" type="text" data-key="${f.key}" value="${esc(v ?? '')}" placeholder="Your full name" autocomplete="name" ${dis}></div>${S.app.data.signed_at ? `<small>Signed electronically ${new Date(S.app.data.signed_at).toLocaleString()}</small>` : ''}`; break;
         case 'files': return filesHtml(f);
+        case 'address': input = `<div class="addr"><input id="${id}" type="text" data-key="${f.key}" data-addr="1" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || 'Start typing the street address')}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" ${dis}></div>`; break;
         default: input = `<input id="${id}" type="${f.type === 'email' ? 'email' : f.type === 'phone' ? 'tel' : 'text'}" data-key="${f.key}" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}" ${f.type === 'state' ? 'maxlength="2"' : ''} autocomplete="${{ email: 'email', phone: 'tel', zip: 'postal-code' }[f.type] || 'off'}" ${dis}>`;
       }
       const q = S.app.editable ? `<button type="button" class="qhelp" data-help="${f.key}" aria-label="What does ${esc(f.label)} mean?" title="What does this mean?">?</button>` : '';
       const labelTag = ['select', 'radio', 'multi', 'bool'].includes(f.type) ? `<div class="lbl">${esc(f.label)}${q}</div>` : `<div class="lbl"><label for="${id}">${esc(f.label)}</label>${q}</div>`;
-      return `<div class="fld ${span}" data-f="${f.key}">${labelTag}${input}${f.help ? `<small>${esc(f.help)}</small>` : ''}${issues.map(issueHtml).join('')}</div>`;
+      return `<div class="fld ${span}" data-f="${f.key}">${labelTag}${input}${f.type === 'address' ? addrNote(v) : ''}${f.help ? `<small>${esc(f.help)}</small>` : ''}${issues.map(issueHtml).join('')}</div>`;
+    }
+
+    // Under the address: what the map screen found, quietly, instead of chat messages.
+    function addrNote(v) {
+      const sc = S.app.screen;
+      if (!v || !sc || S.app.data[S.schema.addressField] !== v) return '';
+      if (sc.jurisdiction?.checked) return sc.jurisdiction.inCity ? `<small class="addr-ok">${icon('check', 12)} Found on the map, inside ${esc(o.cityName.replace(/^(City|Town|Village) of /i, ''))} city limits${sc.flood?.zone ? ` · flood zone ${esc(sc.flood.zone)}` : ''}</small>` : '';
+      return '<small>We couldn\'t place this exact address on the map. That\'s fine: City Hall will confirm it. Picking a suggestion while you type helps.</small>';
     }
 
     function filesHtml(f) {
@@ -447,6 +485,7 @@
       const key = active?.dataset?.key; let sel = null;
       try { sel = key ? [active.selectionStart, active.selectionEnd] : null; } catch { sel = null; }
       const secs = S.schema.sections;
+      S.drawing = true;
       el.innerHTML = `
         <div><h1>${esc(val('project_name') || S.schema.title)}</h1><p class="lede">${esc(o.cityName)} · ${esc(S.schema.department)}${S.app.editable ? ' · Answer in the chat, or fill in anything here directly. Tap ? to ask what something means.' : ''}</p></div>
         ${statusHtml()}
@@ -457,6 +496,12 @@
       if (key) {
         const n = el.querySelector(`[data-key="${key}"]`);
         if (n) { n.focus({ preventScroll: true }); if (sel) try { n.setSelectionRange(...sel); } catch { /* not a text input */ } }
+      }
+      S.drawing = false;
+      // Keep the address suggestions open across a redraw while the resident is still typing.
+      if (A.el && A.input && !A.input.isConnected) {
+        const n = el.querySelector('[data-addr]');
+        if (n && shadow.activeElement === n) { A.input = n; addrDraw(); } else addrClose();
       }
       const flash = flashKeys.map((k) => el.querySelector(`[data-f="${k}"]`)).filter(Boolean);
       if (flash.length) {
@@ -481,17 +526,37 @@
       const keys = Object.keys(S.pending);
       if (!keys.length) return;
       const sent = { ...S.pending };
+      const addr = !!S.schema.addressField && S.schema.addressField in sent;
+      const place = addr ? S.place : null;
+      if (addr) S.place = null;
       try {
-        const v = await call(`/${S.id}`, { method: 'PATCH', body: { data: sent } });
+        const v = await call(`/${S.id}`, { method: 'PATCH', body: { data: sent, ...(place ? { place } : {}) } });
         for (const k of keys) if (S.pending[k] === sent[k]) delete S.pending[k];
-        const addr = 'job_address' in sent;
+        const last = S.msgs[S.msgs.length - 1];
         setApp(v);
-        if (addr && v.screenNote) say(v.screenNote);
-        if (v.ask) syncAsk(v.ask);
+        if (addr && v.screenNote) {
+          const moving = v.ask && last?.role === 'bot' && last.ask && last.ask !== v.ask.id;
+          sayScreen(v.screenNote, !moving);
+          if (moving) askMsg(v.ask);
+        } else {
+          // A new address the map couldn't place: the old "I found …" message no longer applies.
+          if (addr && S.msgs.some((m) => m.screen)) { S.msgs = S.msgs.filter((m) => !m.screen); saveMsgs(); drawChat(); }
+          if (v.ask) syncAsk(v.ask);
+        }
       } catch (err) {
         say(`I couldn't save that: ${err.message}`);
       }
       S.saving = Object.keys(S.pending).length > 0; S.savedAt = Date.now(); drawHead();
+    }
+
+    // One map-screen message at a time: a corrected address replaces the earlier one instead of piling up.
+    // beforeAsk: the address was changed in the form while the chat waits on another question, so the note goes
+    // above that question and its answer buttons stay live.
+    function sayScreen(text, beforeAsk = false) {
+      S.msgs = S.msgs.filter((m) => !m.screen);
+      const last = S.msgs[S.msgs.length - 1];
+      if (beforeAsk && last?.role === 'bot' && last.ask) { S.msgs.splice(-1, 0, { role: 'bot', text, screen: true }); saveMsgs(); drawChat(); }
+      else say(text, { screen: true });
     }
 
     // When a form edit answers the question the chat is waiting on, move the chat along too.
@@ -500,9 +565,106 @@
       if (last?.role === 'bot' && last.ask && last.ask !== a.id) { say('Thanks, I see that in the form.'); askMsg(a); }
     }
 
+    /* ---------------- Address suggestions ---------------- */
+
+    // Suggestions while the resident types the property address, in the form or in the chat, centered on City Hall.
+    // A picked address is saved with its map location; typed text is saved when they leave the field, so a
+    // half-typed address is never saved or screened.
+    const A = { el: null, input: null, items: [], on: -1, seq: 0, timer: 0, session: null, onPick: null, note: null, provider: null };
+    const newSession = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}${Math.random()}`.replace('.', ''));
+
+    function addrSuggest(input, onPick) {
+      A.input = input; A.onPick = onPick; A.note = null;
+      clearTimeout(A.timer);
+      const q = input.value.trim();
+      if (q.length < 3) { addrClose(); return; }
+      A.timer = setTimeout(async () => {
+        const seq = ++A.seq;
+        A.session ||= newSession();
+        try {
+          const res = await fetch(`${api}/permits/address?${new URLSearchParams({ q, session: A.session })}`);
+          const d = await res.json();
+          if (seq !== A.seq || A.input !== input) return;
+          A.items = d.suggestions || []; A.on = -1; A.provider = d.provider;
+          addrDraw();
+        } catch { /* typing still works without suggestions */ }
+      }, 180);
+    }
+
+    function addrDraw() {
+      const input = A.input;
+      const host = input?.isConnected && input.closest('.addr, .composer');
+      if (!host) { addrClose(); return; }
+      if (!A.el || A.el.parentNode !== host) {
+        A.el?.remove();
+        A.el = document.createElement('div'); A.el.className = 'addr-sug'; A.el.setAttribute('role', 'listbox');
+        A.el.addEventListener('mousedown', (e) => e.preventDefault());
+        A.el.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (b) addrPick(A.items[+b.dataset.i]); });
+        host.appendChild(A.el);
+      }
+      const typedNumber = /^\s*\d/.test(input.value);
+      const note = A.note || (!A.items.length
+        ? (typedNumber ? 'Keep typing the street name. Or just finish the address and press Enter.' : 'Start with the house number, like 113 First St N.')
+        : A.provider === 'google' ? 'Powered by Google' : "Don't see it? Finish typing it and press Enter.");
+      A.el.innerHTML = `${A.items.map((s, i) => `<button type="button" role="option" data-i="${i}" class="${i === A.on ? 'on' : ''}" aria-selected="${i === A.on}">${icon('pin', 15)}<span>${esc(s.main)}<small>${esc(s.secondary || '')}${s.needsNumber ? ' · add the house number' : ''}${s.miles != null ? ` · ${s.miles} mi` : ''}</small></span></button>`).join('')}<div class="note">${esc(note)}</div>`;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function addrClose() {
+      clearTimeout(A.timer); A.seq++;
+      A.el?.remove(); A.el = null; A.items = []; A.on = -1;
+      A.input?.setAttribute?.('aria-expanded', 'false');
+    }
+
+    // Arrow keys, Enter and Escape in the suggestion list. Returns true when the key was used.
+    function addrKey(e) {
+      if (!A.el || !A.items.length) { if (e.key === 'Escape' && A.el) { addrClose(); return true; } return false; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        A.on = (A.on + (e.key === 'ArrowDown' ? 1 : -1) + A.items.length + 1) % (A.items.length + 1);
+        if (A.on === A.items.length) A.on = -1;
+        addrDraw(); return true;
+      }
+      if (e.key === 'Enter' && A.on >= 0) { e.preventDefault(); addrPick(A.items[A.on]); return true; }
+      if (e.key === 'Escape') { addrClose(); return true; }
+      return false;
+    }
+
+    function addrPick(s) {
+      if (!s) return;
+      const input = A.input;
+      if (s.needsNumber) {
+        // A street without a house number: put it in and let them add the number in front.
+        input.value = s.text; input.focus(); input.setSelectionRange(0, 0);
+        if (input.dataset.key) S.typed[input.dataset.key] = s.text;
+        A.items = []; A.note = 'Now type the house number at the start.'; addrDraw();
+        return;
+      }
+      const place = s.placeId ? { placeId: s.placeId, session: A.session } : s.lat != null ? { lat: s.lat, lon: s.lon } : null;
+      A.session = null;
+      const done = A.onPick;
+      addrClose();
+      done?.(s.text, place);
+    }
+
+    // Saves what's in the sheet's address field when the resident leaves it or presses Enter.
+    function addrCommit(input) {
+      const k = input.dataset.key;
+      if (!(k in S.typed)) return;
+      const v = input.value.trim();
+      delete S.typed[k];
+      if (v !== (S.app.data[k] || '')) { S.place = null; edit(k, v || null); }
+      flush();
+    }
+
     function onFieldInput(e) {
       const k = e.target.dataset.key; if (!k) return;
       if (e.target.type === 'checkbox') return;
+      if (e.target.dataset.addr) {
+        S.typed[k] = e.target.value;
+        addrSuggest(e.target, (text, place) => { delete S.typed[k]; e.target.value = text; S.place = place; edit(k, text); flush(); });
+        return;
+      }
       let v = e.target.value;
       if (e.target.closest('.money')) v = v.replace(/[^\d.]/g, '');
       edit(k, v);
@@ -768,7 +930,8 @@
         const v = await call(`/${S.id}`);
         await loadSchema(v.kind || 'construction');
         S.app = v; remember();
-        S.msgs = local.get(`${S.id}:msgs`) || [];
+        // Earlier versions posted a map note for every keystroke in the address; keep none of those.
+        S.msgs = (local.get(`${S.id}:msgs`) || []).filter((m) => !/^I couldn't match that address on federal maps/.test(m.text || ''));
         drawHead(); drawSheet();
         if (!S.msgs.length || o.fresh) {
           if (v.status === 'draft') { say(`Welcome back to your **${S.schema.short.toLowerCase()}** application. It's **${v.progress}%** complete, and everything you entered is saved.`); askMsg(v.ask); }
