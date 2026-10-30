@@ -9,10 +9,12 @@ import { modelName } from './assistant.js';
 import { recordReply, respond, summarize } from './reply.js';
 import { phoneConfigured, phoneRoute } from './phone.js';
 import { afterHours } from './hours.js';
+import { remindStale, requestCreated, requestUpdated } from './alerts.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
+import { permitRoute, sendPermitReminders } from './permits/routes.js';
 
 export { CityStore } from './store.js';
 export { AuthService } from './auth.js';
@@ -20,7 +22,7 @@ export { AuthService } from './auth.js';
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Permit-Token',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -33,6 +35,7 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 
 /* ---------------- Cities ---------------- */
 
+const DAILY_CRON = '0 15 * * *';
 const cityCache = new Map();
 
 function toCity(row) {
@@ -98,6 +101,27 @@ export default {
       return fail(e.status || 500, e.status || local ? e.message : 'Something went wrong. Please try again.');
     }
   },
+
+  // Daily at 15:00 UTC: remind applicants about unfinished permit applications and requested corrections.
+  // Hourly: remind staff about service requests nobody has picked up.
+  async scheduled(event, env, ctx) {
+    const { results } = await env.DB.prepare("SELECT * FROM cities WHERE status = 'active'").all();
+    for (const row of results) {
+      const city = toCity(row);
+      const store = storeFor(env, city);
+      try {
+        if (event.cron === DAILY_CRON) {
+          const n = await sendPermitReminders(env, city, store);
+          if (n) console.log(`${city.slug}: sent ${n} permit reminders`);
+        } else {
+          const n = await remindStale(env, city, store);
+          if (n) console.log(`${city.slug}: reminded staff about ${n} unassigned requests`);
+        }
+      } catch (e) {
+        console.log(`${city.slug}: reminders failed`, e.stack || e.message);
+      }
+    }
+  },
 };
 
 async function route(request, env, ctx, url) {
@@ -126,11 +150,12 @@ async function route(request, env, ctx, url) {
   if (city.status !== 'suspended' || me) {
     if (res === 'config' && m === 'GET') return publicConfig(city, store);
     if (res === 'chat' && m === 'POST') return chat(request, env, ctx, city, store, me);
-    if (res === 'requests' && m === 'POST' && !id) return createRequest(request, env, city, store, me);
+    if (res === 'requests' && m === 'POST' && !id) return createRequest(request, env, ctx, city, store, me);
     if (res === 'track' && m === 'GET' && id) return trackRequest(store, id);
     if (res === 'forms' && m === 'GET') return listForms(city, store);
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
-    if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c) });
+    if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c), requestCreated });
+    if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   }
 
   // Staff only. Each route names the permission it needs.
@@ -157,8 +182,9 @@ async function route(request, env, ctx, url) {
   if (res === 'requests') {
     if (!id && m === 'GET') { need('requests.view'); return listRequests(store, me); }
     if (id && sub === 'photo' && m === 'GET') { need('requests.view'); return requestPhoto(env, store, id, me); }
-    if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, store, id, me); }
+    if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, env, ctx, city, store, id, me); }
   }
+  if (res === 'permits') return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
   if (res === 'departments' && (m === 'POST' || m === 'PUT')) { need('settings.edit'); return saveDepartment(request, store, id, me); }
   if (res === 'request-types') {
@@ -200,6 +226,7 @@ async function publicConfig(city, store) {
     city: city.slug, cityName: s.cityName, assistantName: s.assistantName, tagline: s.tagline, greeting: s.greeting,
     brandColor: s.brandColor, suggestions: s.suggestions, phone: s.phone, policeNonEmergency: s.policeNonEmergency,
     requestTypes: (await store.requestTypes()).map(({ key, label }) => ({ key, label })),
+    permits: s.permits?.construction?.enabled !== false,
   }, 200, { 'Cache-Control': 'public, max-age=60' });
 }
 
@@ -564,7 +591,7 @@ const REQUEST_STATUSES = ['new', 'needs_info', 'assigned', 'in_progress', 'await
 // Resident contact details are only shown to roles that work requests.
 const redact = (r, me) => (me.can('residents.contact') ? r : { ...r, name: r.name ? 'Hidden' : null, contact: r.contact ? 'Hidden' : null });
 
-async function createRequest(request, env, city, store, me) {
+async function createRequest(request, env, ctx, city, store, me) {
   const ct = request.headers.get('Content-Type') || '';
   let b; let photo = null;
   if (ct.includes('multipart/form-data')) {
@@ -593,11 +620,17 @@ async function createRequest(request, env, city, store, me) {
     await env.FILES.put(key, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
     await store.setRequestPhoto(created.id, key);
   }
+  ctx.waitUntil(requestCreated(env, city, store, created.id).catch((e) => console.log('request alerts failed', e.message)));
   return json({ ref: created.ref, department: created.department, status: 'new' }, 201);
 }
 
 async function trackRequest(store, ref) {
-  const r = await store.trackRequest(String(ref).toUpperCase().trim());
+  ref = String(ref).toUpperCase().trim();
+  if (/-BP-\d+$/.test(ref)) {
+    const p = await store.trackPermit(ref);
+    return p ? json(p) : fail(404, 'No permit application with that number');
+  }
+  const r = await store.trackRequest(ref);
   return r ? json(r) : fail(404, 'No request with that number');
 }
 
@@ -606,7 +639,7 @@ async function listRequests(store, me) {
   return json({ requests: requests.map((r) => redact(r, me)) });
 }
 
-async function updateRequest(request, store, id, me) {
+async function updateRequest(request, env, ctx, city, store, id, me) {
   const r = await store.getRequest(Number(id));
   if (!r) return fail(404, 'Request not found');
   if (me.departmentId && r.department_id !== me.departmentId) return fail(403, 'This request belongs to another department');
@@ -618,7 +651,9 @@ async function updateRequest(request, store, id, me) {
   if (b.department_id) patch.department_id = clean(b.department_id, 60);
   if (b.note) patch.note = clean(b.note, 1000);
   try {
-    return json({ request: redact(await store.updateRequest(Number(id), patch, me.actor), me) });
+    const after = await store.updateRequest(Number(id), patch, me.actor);
+    ctx.waitUntil(requestUpdated(env, city, store, r, after).catch((e) => console.log('resident update failed', e.message)));
+    return json({ request: redact(after, me) });
   } catch (e) {
     return fail(400, e.message);
   }
@@ -819,10 +854,38 @@ async function saveSettings(request, env, city, store, me) {
     if (JSON.stringify(city.settings[k] ?? '') !== JSON.stringify(v)) changes[k] = [city.settings[k] ?? null, v];
     stored[k] = v;
   }
+  if (b.permits && typeof b.permits === 'object') {
+    const next = permitSettings(b.permits, stored.permits || {});
+    if (JSON.stringify(next) !== JSON.stringify(stored.permits || {})) changes.permits = [stored.permits || null, next];
+    stored.permits = next;
+  }
   await env.DB.prepare('UPDATE cities SET settings = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(stored), now(), city.id).run();
   cityCache.delete(city.slug);
   if (Object.keys(changes).length) {
     await store.record(me.actor, 'settings.update', 'settings', null, `Changed ${Object.keys(changes).join(', ')} in Settings`, changes);
   }
   return json((await getCity(env, city.slug)).settings);
+}
+
+// Permit options staff can change. Fee tiers follow the shape permitFee() in permits/construction.js reads.
+function permitSettings(input, current) {
+  const c = { ...(current.construction || {}) };
+  const b = input.construction || {};
+  if ('enabled' in b) c.enabled = !!b.enabled;
+  if ('autoReturn' in b) c.autoReturn = !!b.autoReturn;
+  if ('paymentInstructions' in b) c.paymentInstructions = clean(b.paymentInstructions, 600) ?? '';
+  if ('department' in b) c.department = clean(b.department, 60) ?? 'planning-building';
+  if ('formUrl' in b) c.formUrl = clean(b.formUrl, 500);
+  if ('pdfTemplate' in b) c.pdfTemplate = clean(b.pdfTemplate, 60);
+  if (b.fees && typeof b.fees === 'object') {
+    const tiers = (Array.isArray(b.fees.tiers) ? b.fees.tiers : []).slice(0, 20).map((t) => ({
+      upTo: t.upTo == null ? null : Number(t.upTo),
+      ...(t.fee != null ? { fee: Number(t.fee) } : { base: Number(t.base), over: Number(t.over), per: Number(t.per) || 1000, add: Number(t.add) }),
+    })).filter((t) => Object.values(t).every((v) => v === null || Number.isFinite(v)));
+    c.fees = {
+      tiers, doubleIfStarted: !!b.fees.doubleIfStarted, planReviewShare: Number(b.fees.planReviewShare) || 0,
+      notes: (Array.isArray(b.fees.notes) ? b.fees.notes : []).map((x) => clean(x, 300)).filter(Boolean).slice(0, 10), source: clean(b.fees.source, 300),
+    };
+  }
+  return { ...current, construction: c };
 }

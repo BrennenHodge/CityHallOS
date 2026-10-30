@@ -192,6 +192,89 @@ const MIGRATIONS = [
   CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   `,
+  `
+  -- Permit applications. A draft belongs to whoever holds its secret link (token_hash); it gets a reference
+  -- number ({prefix}-BP-1001) when it is submitted. Every answer lives once, in data.
+  CREATE TABLE permits (
+    id TEXT PRIMARY KEY,
+    ref TEXT UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'construction',
+    status TEXT NOT NULL DEFAULT 'draft'
+      CHECK (status IN ('draft', 'submitted', 'needs_info', 'fees_due', 'in_review', 'issued', 'closed', 'denied', 'withdrawn')),
+    token_hash TEXT NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    asked TEXT NOT NULL DEFAULT '[]',
+    screen TEXT,
+    checks TEXT,
+    review TEXT,
+    progress INTEGER NOT NULL DEFAULT 0,
+    applicant TEXT,
+    address TEXT,
+    contact TEXT,
+    fee_estimate REAL,
+    fee_assessed REAL,
+    fee_paid REAL,
+    receipt TEXT,
+    permit_number TEXT UNIQUE,
+    conditions TEXT,
+    issued_by TEXT,
+    assignee_id TEXT REFERENCES staff(id),
+    convo_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    reminders INTEGER NOT NULL DEFAULT 0,
+    auto_returns INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    applicant_at TEXT NOT NULL,
+    submitted_at TEXT,
+    decided_at TEXT
+  );
+  CREATE INDEX permits_status ON permits (status, updated_at);
+
+  CREATE TABLE permit_files (
+    id TEXT PRIMARY KEY,
+    permit_id TEXT NOT NULL REFERENCES permits(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mime TEXT,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    file_key TEXT NOT NULL,
+    text TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX permit_files_permit ON permit_files (permit_id);
+
+  -- The application's timeline. public rows are shown to the applicant.
+  CREATE TABLE permit_events (
+    id INTEGER PRIMARY KEY,
+    permit_id TEXT NOT NULL REFERENCES permits(id) ON DELETE CASCADE,
+    at TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT,
+    note TEXT,
+    data TEXT,
+    public INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX permit_events_permit ON permit_events (permit_id, id);
+
+  -- Every email, text and call to a resident, sent or not.
+  CREATE TABLE outbox (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    channel TEXT NOT NULL CHECK (channel IN ('email', 'sms', 'call')),
+    to_addr TEXT,
+    subject TEXT,
+    body TEXT,
+    status TEXT NOT NULL CHECK (status IN ('sent', 'failed', 'not_configured')),
+    provider_id TEXT,
+    error TEXT
+  );
+  CREATE INDEX outbox_entity ON outbox (entity_type, entity_id, id);
+  INSERT OR IGNORE INTO meta (key, value) VALUES ('permit_seq', '1000');
+  `,
   // Routing rules, source checks, verification dates, notification state and text-message intake.
   `
   ALTER TABLE request_types ADD COLUMN default_assignee_id TEXT REFERENCES staff(id);
@@ -208,6 +291,11 @@ const MIGRATIONS = [
   CREATE INDEX conversations_contact ON conversations (channel, contact, last_at);
   `,
 ];
+
+const PERMIT_JSON = ['data', 'asked', 'screen', 'checks', 'review', 'contact'];
+const parsePermit = (p) => p && Object.fromEntries(Object.entries(p).map(([k, v]) => [k, PERMIT_JSON.includes(k) && v ? JSON.parse(v) : v]));
+const PERMIT_LIST = `SELECT p.id, p.ref, p.kind, p.status, p.applicant, p.address, p.contact, p.progress, p.fee_estimate, p.fee_assessed, p.fee_paid, p.permit_number,
+  p.checks, p.review, p.created_at, p.updated_at, p.submitted_at, p.decided_at, p.assignee_id, s.name AS assignee FROM permits p LEFT JOIN staff s ON s.id = p.assignee_id`;
 
 const DOC_COLS = 'id, title, category, source_url, authority, visibility, verification, as_of, file_name, mime, bytes, chars, chunks, status, error, notes, created_by, updated_by, created_at, updated_at, verified_at, verified_by, source_checked_at, source_changed_at';
 const DOC_FIELDS = ['title', 'category', 'source_url', 'authority', 'visibility', 'verification', 'as_of', 'notes'];
@@ -774,6 +862,167 @@ export class CityStore extends DurableObject {
     };
   }
 
+  /* ---------------- Permit applications ---------------- */
+
+  createPermit({ id, tokenHash, kind, data, convoId }) {
+    const t = now();
+    const convo = convoId && this.one('SELECT id FROM conversations WHERE id = ?', convoId) ? convoId : null;
+    this.run('INSERT INTO permits (id, kind, token_hash, data, convo_id, created_at, updated_at, applicant_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      id, kind, tokenHash, JSON.stringify(data || {}), convo, t, t, t);
+    this.run("INSERT INTO permit_events (permit_id, at, actor_type, actor_name, kind, status, note, public) VALUES (?, ?, 'resident', 'Applicant', 'status', 'draft', 'Application started', 1)", id, t);
+    return this.permit(id);
+  }
+
+  permitRow(id) { return parsePermit(this.one('SELECT * FROM permits WHERE id = ?', id)); }
+
+  permit(id) {
+    const p = this.permitRow(id);
+    if (!p) return null;
+    return { ...p, files: this.permitFiles(id) };
+  }
+
+  permitFiles(id) { return this.all('SELECT id, kind, name, mime, bytes, created_at, text IS NOT NULL AS has_text FROM permit_files WHERE permit_id = ? ORDER BY created_at', id); }
+  permitFileTexts(id) { return this.all('SELECT kind, name, text FROM permit_files WHERE permit_id = ? AND text IS NOT NULL', id); }
+  permitFile(permitId, fileId) { return this.one('SELECT * FROM permit_files WHERE permit_id = ? AND id = ?', permitId, fileId); }
+
+  // Saves answers and everything computed from them. Not audited per keystroke; status changes are.
+  savePermit(id, p, { byApplicant = true } = {}) {
+    const sets = []; const args = [];
+    for (const [k, v] of Object.entries(p)) { sets.push(`${k} = ?`); args.push(PERMIT_JSON.includes(k) && v != null ? JSON.stringify(v) : v); }
+    const t = now();
+    sets.push('updated_at = ?'); args.push(t);
+    if (byApplicant) { sets.push('applicant_at = ?'); args.push(t); }
+    this.run(`UPDATE permits SET ${sets.join(', ')} WHERE id = ?`, ...args, id);
+    return this.permit(id);
+  }
+
+  addPermitFile(f) {
+    this.run('INSERT INTO permit_files (id, permit_id, kind, name, mime, bytes, file_key, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      f.id, f.permit_id, f.kind, f.name, f.mime, f.bytes, f.file_key, f.text ?? null, now());
+    this.run('UPDATE permits SET updated_at = ?, applicant_at = ? WHERE id = ?', now(), now(), f.permit_id);
+    return this.permitFiles(f.permit_id);
+  }
+
+  savePermitFileText(permitId, fileId, text) { this.run('UPDATE permit_files SET text = ? WHERE permit_id = ? AND id = ?', text, permitId, fileId); }
+
+  // The stored copy of a city document, by the address it was published at.
+  documentFileBySource(url) {
+    const path = String(url).replace(/^https?:\/\/[^/]+/, '').replace(/[?#].*$/, '');
+    return this.one('SELECT file_key FROM documents WHERE source_url LIKE ? AND file_key IS NOT NULL ORDER BY updated_at DESC', `%${path}%`)?.file_key || null;
+  }
+
+  removePermitFile(permitId, fileId) {
+    const f = this.permitFile(permitId, fileId);
+    if (f) this.run('DELETE FROM permit_files WHERE id = ?', fileId);
+    return f;
+  }
+
+  permitEvent(id, { actor, kind, status = null, note = null, data = null, isPublic = false }) {
+    this.run('INSERT INTO permit_events (permit_id, at, actor_type, actor_name, kind, status, note, data, public) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, now(), actor.type, actor.name, kind, status, note, data ? JSON.stringify(data) : null, isPublic ? 1 : 0);
+  }
+
+  // Gives the application its reference number the first time it is submitted.
+  submitPermit(id, prefix, actor) {
+    return this.tx(() => {
+      const p = this.permitRow(id);
+      let ref = p.ref;
+      if (!ref) {
+        const n = Number(this.one("SELECT value FROM meta WHERE key = 'permit_seq'").value) + 1;
+        this.run("UPDATE meta SET value = ? WHERE key = 'permit_seq'", String(n));
+        ref = `${prefix}-BP-${n}`;
+      }
+      const t = now();
+      const again = p.status === 'needs_info';
+      this.run("UPDATE permits SET ref = ?, status = 'submitted', submitted_at = ?, updated_at = ?, applicant_at = ? WHERE id = ?", ref, t, t, t, id);
+      this.permitEvent(id, { actor, kind: 'status', status: 'submitted', note: again ? 'Corrections submitted by the applicant' : 'Application submitted', isPublic: true });
+      this.log(actor, again ? 'permit.resubmit' : 'permit.submit', 'permit', ref,
+        `${ref} ${again ? 'resubmitted with corrections' : 'submitted'}: ${String(p.data.description || 'construction permit').slice(0, 80)}${p.address ? ` at ${p.address}` : ''}`);
+      return this.permit(id);
+    });
+  }
+
+  // Staff and AI decisions. patch holds the columns that change with the status.
+  setPermitStatus(id, status, actor, { note = null, publicNote = null, patch = {}, kind = 'status', data = null } = {}) {
+    return this.tx(() => {
+      const before = this.permitRow(id);
+      const cols = { status, ...patch };
+      if (['issued', 'denied'].includes(status)) cols.decided_at = now();
+      const sets = Object.keys(cols).map((k) => `${k} = ?`);
+      this.run(`UPDATE permits SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`, ...Object.values(cols), now(), id);
+      if (publicNote || status !== before.status) this.permitEvent(id, { actor, kind, status, note: publicNote, data, isPublic: true });
+      if (note) this.permitEvent(id, { actor, kind: 'note', status, note });
+      const changes = { status: [before.status, status] };
+      for (const k of Object.keys(patch)) if (before[k] !== patch[k]) changes[k] = [before[k] ?? null, patch[k]];
+      this.log(actor, `permit.${kind === 'status' ? status : kind}`, 'permit', before.ref || id,
+        `${before.ref || 'Draft'}: ${status.replace(/_/g, ' ')}${publicNote ? ` (${publicNote.slice(0, 120)})` : ''}`, changes);
+      return this.permit(id);
+    });
+  }
+
+  permitNote(id, actor, note, isPublic = false) {
+    const p = this.permitRow(id);
+    this.permitEvent(id, { actor, kind: 'note', status: p.status, note, isPublic });
+    this.log(actor, 'permit.note', 'permit', p.ref || id, `${p.ref}: ${isPublic ? 'message to applicant' : 'note'}`);
+  }
+
+  assignPermit(id, assigneeId, actor) {
+    const p = this.permitRow(id);
+    if (assigneeId && !this.staffMember(assigneeId)) throw new Error('Unknown staff member');
+    this.run('UPDATE permits SET assignee_id = ?, updated_at = ? WHERE id = ?', assigneeId, now(), id);
+    const name = assigneeId ? this.staffMember(assigneeId).name : 'nobody';
+    this.permitEvent(id, { actor, kind: 'note', status: p.status, note: `Assigned to ${name}` });
+    this.log(actor, 'permit.assign', 'permit', p.ref, `${p.ref}: assigned to ${name}`, { assignee_id: [p.assignee_id, assigneeId] });
+  }
+
+  listPermits({ status } = {}) {
+    const rows = status ? this.all(`${PERMIT_LIST} WHERE p.status = ? ORDER BY p.updated_at DESC LIMIT 300`, status)
+      : this.all(`${PERMIT_LIST} WHERE p.status != 'draft' ORDER BY p.updated_at DESC LIMIT 300`);
+    return rows.map(parsePermit);
+  }
+
+  permitForStaff(id) {
+    const p = this.permit(id);
+    if (!p) return null;
+    const { token_hash, ...rest } = p;
+    return {
+      ...rest,
+      assignee: rest.assignee_id ? this.staffMember(rest.assignee_id)?.name : null,
+      events: this.all('SELECT at, actor_type, actor_name, kind, status, note, data, public FROM permit_events WHERE permit_id = ? ORDER BY id', id)
+        .map((e) => ({ ...e, data: e.data ? JSON.parse(e.data) : null })),
+      outbox: this.all("SELECT at, channel, to_addr, subject, body, status, error FROM outbox WHERE entity_type = 'permit' AND entity_id = ? ORDER BY id", id),
+    };
+  }
+
+  permitPublicEvents(id) {
+    return this.all('SELECT at, kind, status, note, data FROM permit_events WHERE permit_id = ? AND public = 1 ORDER BY id', id).map((e) => ({ ...e, data: e.data ? JSON.parse(e.data) : null }));
+  }
+
+  // What anyone can see with the reference number alone.
+  trackPermit(ref) {
+    const p = this.one('SELECT id, ref, kind, status, permit_number, submitted_at, updated_at, decided_at FROM permits WHERE ref = ?', ref);
+    if (!p) return null;
+    const updates = this.all("SELECT at, status, kind FROM permit_events WHERE permit_id = ? AND public = 1 AND kind = 'status' ORDER BY id", p.id);
+    const { id, ...rest } = p;
+    return { ...rest, type: 'permit', updates };
+  }
+
+  recordOutbox(o) {
+    this.run('INSERT INTO outbox (at, entity_type, entity_id, channel, to_addr, subject, body, status, provider_id, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      now(), o.entity_type, o.entity_id, o.channel, o.to_addr, o.subject, o.body, o.status, o.provider_id, o.error);
+  }
+
+  // Applications waiting on the applicant: unfinished drafts with contact details, and corrections not yet made.
+  permitsNeedingReminder() {
+    const day = 864e5;
+    const draftCut = new Date(Date.now() - 2 * day).toISOString();
+    const infoCut = new Date(Date.now() - 4 * day).toISOString();
+    return this.all(`SELECT id FROM permits WHERE contact IS NOT NULL AND reminders < 2 AND (
+        (status = 'draft' AND applicant_at < ? AND progress >= 15) OR (status = 'needs_info' AND applicant_at < ?))`, draftCut, infoCut)
+      .map((r) => this.permitRow(r.id))
+      .filter((p) => !p.reminders || p.updated_at < new Date(Date.now() - 3 * day).toISOString());
+  }
+
   /* ---------------- Overview, audit, export ---------------- */
 
   overview(tzModifier = '+0 minutes') {
@@ -795,6 +1044,10 @@ export class CityStore extends DurableObject {
       byDay: this.all(`SELECT substr(datetime(started_at, ?), 1, 10) AS day, COUNT(*) AS n FROM conversations WHERE ${real} AND started_at >= ? GROUP BY day ORDER BY day`, tzModifier, since),
       recentRequests: this.all('SELECT r.id, r.ref, r.category, d.name AS department, r.status, r.location, r.created_at FROM requests r JOIN departments d ON d.id = r.department_id ORDER BY r.id DESC LIMIT 5'),
       unanswered: this.all(`SELECT id, first_question, last_at FROM conversations WHERE status = 'needs_review' AND ${real} ORDER BY last_at DESC LIMIT 5`),
+      permits: {
+        ...one("SELECT COALESCE(SUM(status = 'draft'), 0) AS drafts, COALESCE(SUM(status IN ('submitted', 'needs_info', 'fees_due', 'in_review')), 0) AS open, COALESCE(SUM(status = 'submitted'), 0) AS toReview, COALESCE(SUM(status = 'issued'), 0) AS issued FROM permits"),
+        recent: this.all("SELECT id, ref, status, address, applicant, submitted_at FROM permits WHERE status != 'draft' ORDER BY updated_at DESC LIMIT 5"),
+      },
     };
   }
 
@@ -810,13 +1063,15 @@ export class CityStore extends DurableObject {
 
   // Everything this city has, for backups or when a city wants its data.
   exportAll() {
-    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log'];
-    return Object.fromEntries(tables.map((t) => [t, this.all(`SELECT * FROM ${t}`)]));
+    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events',
+      'permits', 'permit_files', 'permit_events', 'outbox', 'audit_log'];
+    return Object.fromEntries(tables.map((t) => [t, this.all(`SELECT * FROM ${t}`)
+      .map(({ token_hash, ...r }) => r)]));
   }
 
   stats() {
     return {
-      ...Object.fromEntries(['documents', 'chunks', 'conversations', 'requests', 'audit_log'].map((t) => [t, this.one(`SELECT COUNT(*) AS n FROM ${t}`).n])),
+      ...Object.fromEntries(['documents', 'chunks', 'conversations', 'requests', 'permits', 'audit_log'].map((t) => [t, this.one(`SELECT COUNT(*) AS n FROM ${t}`).n])),
       bytes: this.ctx.storage.sql.databaseSize,
       schema: Number(this.one("SELECT value FROM meta WHERE key = 'schema_version'")?.value || 0),
     };

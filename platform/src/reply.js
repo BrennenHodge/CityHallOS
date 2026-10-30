@@ -1,6 +1,6 @@
 // The AI City Clerk's reply to a resident, shared by the website chat, text messages and phone calls.
 import { search } from './search.js';
-import { buildUserMessage, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
+import { buildUserMessage, detectPermit, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
 
 // A one-line summary staff see on a request card.
 export function summarize(label, location, description) {
@@ -26,7 +26,7 @@ export async function respond(env, city, store, { convoId, question, history = [
   const emit = async (event, data) => { if (send) await send(event, data); };
   let answer = '';
   let sources = [];
-  let flags = { needsStaff: false, offerReport: false, emergency: false };
+  let flags = { needsStaff: false, offerReport: false, emergency: false, offerPermit: false };
   let reportType = null;
   let type = null;
   try {
@@ -86,6 +86,8 @@ export async function respond(env, city, store, { convoId, question, history = [
     answer += (answer ? '\n\n' : '') + msg;
     await emit('delta', { t: msg }).catch(() => {});
   }
+  // Building questions on the website can open the guided permit application.
+  flags.offerPermit = ['web', 'staff-test'].includes(channel) && !flags.emergency && !reportType && s.permits?.construction?.enabled !== false && !!detectPermit(question);
   const cited = citedNumbers(answer);
   return { answer, sources, used: sources.filter((x) => cited.has(x.n)), cited, flags, reportType, type };
 }
