@@ -20,13 +20,16 @@ export function cityDate(tz) {
 }
 
 // The departments this person dispatches for: their own, or for administrators every department with field work.
+// ?department= narrows it to one of those.
 async function scope(store, me, url) {
-  if (me.departmentId) return [me.departmentId];
-  const [departments, crews] = await Promise.all([store.departments(), store.crews()]);
-  const withCrews = new Set(crews.filter((c) => c.active).map((c) => c.department_id));
-  const ids = departments.filter((d) => d.active && (DISPATCH_DEPARTMENTS.includes(d.id) || withCrews.has(d.id))).map((d) => d.id);
+  let all = [me.departmentId];
+  if (!me.departmentId) {
+    const [departments, crews] = await Promise.all([store.departments(), store.crews()]);
+    const withCrews = new Set(crews.filter((c) => c.active).map((c) => c.department_id));
+    all = departments.filter((d) => d.active && (DISPATCH_DEPARTMENTS.includes(d.id) || withCrews.has(d.id))).map((d) => d.id);
+  }
   const want = url.searchParams.get('department');
-  return want && ids.includes(want) ? [want] : ids;
+  return { all, ids: want && all.includes(want) ? [want] : all };
 }
 
 const redactRequest = (r, me) => (me.can('residents.contact') || !r ? r : { ...r, name: r.name ? 'Hidden' : null, contact: r.contact ? 'Hidden' : null });
@@ -46,7 +49,7 @@ export async function dispatchRoute(request, { env, ctx, url, city, store, me, n
     // GET /dispatch/board?week=YYYY-MM-DD&department=id: this week by crew, plus everything not scheduled yet.
     if (id === 'board' && m === 'GET') {
       need('dispatch.view');
-      const departmentIds = await scope(store, me, url);
+      const { all, ids: departmentIds } = await scope(store, me, url);
       const day = validDate(url.searchParams.get('week')) ? url.searchParams.get('week') : today;
       const from = addDays(day, -((new Date(`${day}T12:00:00Z`).getUTCDay() + 6) % 7)); // Monday
       if (departmentIds.length) {
@@ -54,12 +57,12 @@ export async function dispatchRoute(request, { env, ctx, url, city, store, me, n
         ctx.waitUntil(geocodePending(env, city, store));
       }
       const board = departmentIds.length ? await store.board({ departmentIds, from, to: addDays(from, 6) }) : { crews: [], workOrders: [], unscheduled: [], suggestions: [] };
-      const departments = (await store.departments()).filter((d) => departmentIds.includes(d.id)).map(({ id: did, name }) => ({ id: did, name }));
+      const departments = (await store.departments()).filter((d) => all.includes(d.id)).map(({ id: did, name }) => ({ id: did, name }));
       return json({ today, from, to: addDays(from, 6), departments, ...board, unscheduled: board.unscheduled.map((r) => redactRequest(r, me)) });
     }
     if (id === 'map' && m === 'GET') {
       need('dispatch.view');
-      const departmentIds = await scope(store, me, url);
+      const { ids: departmentIds } = await scope(store, me, url);
       ctx.waitUntil(geocodePending(env, city, store));
       const pts = await store.mapPoints({ departmentIds });
       return json({ today, located: pts.located.map((r) => redactRequest(r, me)), unlocated: pts.unlocated.map((r) => redactRequest(r, me)) });
@@ -173,7 +176,7 @@ export async function dispatchRoute(request, { env, ctx, url, city, store, me, n
   if (res === 'field' && !id && m === 'GET') {
     need('dispatch.manage');
     const date = validDate(url.searchParams.get('date')) ? url.searchParams.get('date') : today;
-    const work = await store.fieldWork({ staffId: me.staffId, departmentIds: await scope(store, me, url), date });
+    const work = await store.fieldWork({ staffId: me.staffId, departmentIds: (await scope(store, me, url)).ids, date });
     return json({ today, date, ...work, workOrders: work.workOrders.map((w) => ({ ...w, request: redactRequest(w.request, me) })) });
   }
   return fail(404, 'Not found');

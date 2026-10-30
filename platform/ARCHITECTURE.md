@@ -59,8 +59,8 @@ Defined in `src/auth.js`. Every staff API route names the permission it needs.
 |---|---|
 | Administrator | Everything: staff accounts, roles, settings, export |
 | Knowledge editor | Add and change documents, review conversations, read the audit log |
-| Department staff | See and work only their department's requests, log phone and counter requests |
-| Viewer | See the dashboard; resident names and contact details are hidden |
+| Department staff | See and work only their department's requests, log phone and counter requests, dispatch their department's crews and work orders |
+| Viewer | See the dashboard and dispatch board; resident names and contact details are hidden |
 
 City Hall OS support signs in with the `ADMIN_KEY` access code and acts as an administrator in every city.
 Scripts can send the same code as a bearer token.
@@ -76,6 +76,26 @@ Staff see it under **Activity** in the dashboard.
 
 Service requests also keep a `request_events` timeline. Status changes are shown to the resident on the
 tracking page; staff notes are not.
+
+## Public Works dispatcher
+
+Turns service requests into scheduled field work (`src/dispatch.js` for the API, `src/dispatch-store.js` for the data,
+`public/dispatch.js` for the dashboard pages). It builds on requests rather than replacing them:
+
+- **Crews** are named groups of people from the staff directory, one department each.
+- **Work orders** (`WO-1001`, …) belong to a request: crew, date, materials, labor notes and status (scheduled, in progress,
+  done, cancelled). A request can have several. Its status follows them: any scheduled → assigned, any started → in progress,
+  all done → resolved. Marking a job done needs a before/after photo or a note. Photos are in R2 under `{city id}/work-orders/`.
+- **Residents** tracking a request see "Scheduled for <date>", "Rescheduled for <date>" and "Completed on <date>", and are sent
+  the same through `notify.js`.
+- **The dispatch board** shows today's and this week's work by crew and everything not scheduled yet; **the map** (Leaflet with
+  OpenStreetMap tiles) shows open requests and their work; **My work** is the phone view for crews.
+- **The dispatcher** suggests: likely duplicates (an earlier open report of the same problem within 80 m, or the same typed
+  address), a higher priority (hazard wording, several reports of one spot, a long wait), and a crew and day (work already
+  booked nearby, experience with the job, the lightest schedule). Staff accept or dismiss each one; a dismissed suggestion
+  isn't made again. Suggestions are recorded in the audit log as the AI's, decisions as the staff member's.
+- **Typed addresses** are placed on the map with the free US Census Bureau geocoder, falling back to OpenStreetMap's Nominatim.
+  Requests with GPS keep their own coordinates; anything that can't be placed is listed under "No location".
 
 ## Adding a city
 

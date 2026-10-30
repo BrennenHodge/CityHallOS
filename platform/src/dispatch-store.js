@@ -488,7 +488,7 @@ export const dispatchMethods = {
           for (let i = 0; i < 14 && (weekday(date) % 6 === 0 || best.mine.filter((w) => w.scheduled_date === date).length >= 4); i++) date = addDays(date, 1);
         }
         const parts = [];
-        if (best.near) parts.push(`already working ${Math.round(metres(best.near, r))} m away on ${shortDate(best.near.scheduled_date)} (${best.near.ref})`);
+        if (best.near) parts.push(`already working ${Math.round(metres(best.near, r))} m away that day (${best.near.ref})`);
         if (best.done) parts.push(`has finished ${best.done} similar job${best.done === 1 ? '' : 's'}`);
         if (options.length > 1 && !best.near) parts.push(best.week ? `lightest schedule this week (${best.week} job${best.week === 1 ? '' : 's'})` : 'nothing else booked this week');
         if (!parts.length) parts.push(best.week ? `${best.week} job${best.week === 1 ? '' : 's'} booked this week` : 'nothing else booked this week');
