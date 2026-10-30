@@ -11,6 +11,7 @@ import { phoneConfigured, phoneRoute } from './phone.js';
 import { afterHours } from './hours.js';
 import { remindStale, requestCreated, requestUpdated } from './alerts.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
+import { cleanServices } from './services.js';
 import { meetingsRoute } from './meetings.js';
 import { recordsPublic, recordsStaff } from './records.js';
 import {
@@ -855,7 +856,7 @@ async function overview(env, city, store) {
 }
 
 const EDITABLE_SETTINGS = ['shortName', 'assistantName', 'tagline', 'greeting', 'brandColor', 'suggestions', 'phone', 'address', 'hours', 'website',
-  'publicSite', 'policeNonEmergency', 'profileNotes', 'disambiguation', 'openTime', 'closeTime', 'openDays', 'minutesPerCall', 'baselineCallsPerWeek'];
+  'publicSite', 'policeNonEmergency', 'profileNotes', 'disambiguation', 'openTime', 'closeTime', 'openDays', 'minutesPerCall', 'baselineCallsPerWeek', 'services'];
 
 async function saveSettings(request, env, city, store, me) {
   const b = await request.json();
@@ -865,6 +866,7 @@ async function saveSettings(request, env, city, store, me) {
   for (const k of EDITABLE_SETTINGS) {
     if (!(k in b)) continue;
     const v = k === 'suggestions' ? (Array.isArray(b[k]) ? b[k].map((x) => clean(x, 100)).filter(Boolean).slice(0, 6) : [])
+      : k === 'services' ? cleanServices(b[k])
       : k === 'openDays' ? (Array.isArray(b[k]) ? [...new Set(b[k].map(Number).filter((d) => d >= 0 && d <= 6))].sort() : [1, 2, 3, 4, 5])
       : clean(b[k], 1200) ?? '';
     if ((k === 'brandColor' && !/^#[0-9a-f]{6}$/i.test(v)) || (k === 'shortName' && !v)) continue;

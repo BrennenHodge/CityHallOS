@@ -1,5 +1,6 @@
 // The AI City Clerk: builds a grounded prompt and streams the answer.
 import Anthropic from '@anthropic-ai/sdk';
+import { servicesProfile } from './services.js';
 
 export const WORKERS_AI_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 export const CLAUDE_MODEL = 'claude-opus-5-5';
@@ -75,7 +76,12 @@ How to answer:
 - Independent news reports are not official minutes. Say "local news reported" and suggest confirming with the City Clerk.
 - If the sources don't answer the question, say plainly that you don't have that in the city's documents yet, give the City Hall phone number (${s.phone}), say you've flagged the question for City Hall staff, and end your reply with the exact token <<NEEDS_STAFF>>.
 - If the resident is reporting a problem the city should fix (pothole, water leak, streetlight out, missed trash, drainage, downed tree, overgrown lot), briefly acknowledge it and end your reply with the exact token <<OFFER_REPORT>> so the chat can open the report form.
-- If anything sounds like an emergency or danger to life or property, tell them to call 911 right away.${forms.length ? `
+- If anything sounds like an emergency or danger to life or property, tell them to call 911 right away.${s.services?.length ? `
+- The city profile [1] lists online services with their direct links. When the resident wants to do one of those things (for example pay a bill), ${channel === 'web' || channel === 'staff-test'
+    ? 'give the direct link itself as a markdown link, like [Pay your water bill](https://...) [1], in your first sentence. Never only tell them which website to go to or where to find the link.'
+    : channel === 'sms'
+      ? 'say they can do it online with the link below; the platform adds it to this text.'
+      : `say they can do it online${s.publicSite || s.website ? ` from the city's website, ${(s.publicSite || s.website).replace(/^https?:\/\//, '').replace(/\/$/, '')}` : ''}, or in person at City Hall.`}` : ''}${forms.length ? `
 - Residents can fill out these applications online: ${forms.map((f) => `${f.title} (${f.kind})`).join('; ')}. ${channel === 'web' || channel === 'staff-test'
     ? 'When a resident needs one, say they can start it here in the chat, and end your reply with the exact token <<FORM:kind>> using the kind in parentheses, so the chat shows a button.'
     : `When a resident needs one, say they can fill it out online in the chat on the city's website${s.publicSite || s.website ? ` (${s.publicSite || s.website})` : ''}, on their phone, and end your reply with the exact token <<FORM:kind>> using the kind in parentheses.`} Never tell them to download, print or fill out a PDF form; the online application replaces it, and its AI helper answers questions while they fill it out.` : ''}
@@ -84,7 +90,7 @@ How to answer:
 
 export function buildUserMessage(s, question, hits) {
   const profile = `City Hall: ${s.address}. Phone ${s.phone}. ${s.hours ? 'Hours: ' + s.hours + '.' : ''} Website: ${s.website}. ` +
-    `Police non-emergency: ${s.policeNonEmergency}. Emergencies: call 911.` + (s.profileNotes ? ' ' + s.profileNotes : '');
+    `Police non-emergency: ${s.policeNonEmergency}. Emergencies: call 911.` + (s.profileNotes ? ' ' + s.profileNotes : '') + servicesProfile(s);
   const blocks = [`[1] City profile (set by City Hall staff, current)\n${profile}`];
   hits.forEach((h, i) => {
     const d = h.doc;

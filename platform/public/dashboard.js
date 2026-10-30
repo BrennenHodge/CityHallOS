@@ -1193,6 +1193,10 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
           <label class="field"><span>Site where the chat is installed</span><input class="input" name="publicSite" value="${esc(s.publicSite || '')}" placeholder="https://"></label>
           <label class="field"><span>Other current facts</span><textarea class="textarea" name="profileNotes" rows="4" placeholder="e.g. The Board of Aldermen meets the first and third Tuesday of each month at 6 pm at City Hall.">${esc(s.profileNotes || '')}</textarea></label>
         </div></div>
+        <div class="card"><div class="card-h"><h2>Online services</h2><button type="button" class="btn btn-sm" id="svcAdd" style="margin-left:auto">${icon('plus')} Add a service</button></div><div class="card-b stack" style="gap:12px">
+          <p class="muted" style="margin:0">Things residents can do on another website, like paying a water bill. When a question uses one of the words, the AI gives the direct link and the chat shows a button to it. Text message replies include the link.</p>
+          <div class="stack" id="svcRows" style="gap:10px">${(s.services || []).map(serviceRow).join('') || ''}</div>
+        </div></div>
         <div class="card"><div class="card-h"><h2>Office hours and results</h2></div><div class="card-b stack" style="gap:14px">
           <p class="muted" style="margin:0">Office hours decide who hears about a new request after hours. The two numbers below turn questions answered into staff time saved on the Results page.</p>
           <div class="grid-2">
@@ -1209,6 +1213,8 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
       </form>
       <div class="stack" style="max-width:1100px;margin-top:22px" id="routingArea"><div class="empty"><div class="spin" style="margin:20px auto"></div></div></div>`;
     $('#openDays').onclick = (e) => { const c = e.target.closest('.chip'); if (c) c.classList.toggle('on'); };
+    $('#svcAdd').onclick = () => { $('#svcRows').insertAdjacentHTML('beforeend', serviceRow({})); $('#svcRows .svc:last-child input').focus(); };
+    $('#svcRows').onclick = (e) => { if (e.target.closest('[data-svc-remove]')) e.target.closest('.svc').remove(); };
     renderRouting($('#routingArea'));
     const f = $('#sForm');
     f.brandColor.oninput = () => { $('#colorText').value = f.brandColor.value; };
@@ -1218,6 +1224,11 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
       const body = Object.fromEntries(new FormData(f).entries());
       body.suggestions = body.suggestions.split('\n').map((x) => x.trim()).filter(Boolean);
       body.openDays = $$('#openDays .chip.on').map((c) => Number(c.dataset.day));
+      for (const k of ['svcLabel', 'svcUrl', 'svcWords']) delete body[k];
+      body.services = $$('#svcRows .svc').map((r) => ({ label: r.querySelector('[name=svcLabel]').value.trim(), url: r.querySelector('[name=svcUrl]').value.trim(), words: r.querySelector('[name=svcWords]').value.trim() }))
+        .filter((x) => x.label || x.url);
+      const bad = body.services.find((x) => !x.label || !/^https:\/\/\S+$/i.test(x.url));
+      if (bad) { toast('Each online service needs a name and a link starting with https://'); return; }
       try {
         const saved = await api('/settings', { method: 'PUT', body });
         Object.assign(state.city, { shortName: saved.shortName, publicSite: saved.publicSite, brandColor: saved.brandColor });
@@ -1225,6 +1236,15 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
         toast('Settings saved. The chatbot updates within a minute.');
       } catch (err) { toast(err.message); }
     };
+  }
+
+  function serviceRow(x) {
+    return `<div class="svc" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;gap:8px;align-items:end;border:1px solid var(--line);border-radius:12px;padding:10px">
+      <label class="field"><span>Name</span><input class="input" name="svcLabel" value="${esc(x.label || '')}" placeholder="Pay your water bill"></label>
+      <label class="field"><span>Direct link</span><input class="input" name="svcUrl" value="${esc(x.url || '')}" placeholder="https://"></label>
+      <button type="button" class="btn btn-sm" data-svc-remove title="Remove">${icon('trash')}</button>
+      <label class="field" style="grid-column:1 / -1"><span>Words residents use</span><input class="input" name="svcWords" value="${esc(x.words || '')}" placeholder="water bill, utility bill, pay my bill"><small>Separate with commas.</small></label>
+    </div>`;
   }
 
   /* ---------------- Departments and request routing (in Settings) ---------------- */

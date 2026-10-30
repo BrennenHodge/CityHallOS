@@ -161,6 +161,13 @@
           "source": "City of Wiggins Planning & Building fee schedule (published, undated). City Hall confirms the final amount."
         }
       }
-    }
+    },
+    "services": [
+      {
+        "label": "Pay your water bill",
+        "url": "https://new.nexbillpay.net/cityofwigginsms/BillPay/SignIn",
+        "words": "water bill, utility bill, sewer bill, garbage bill, trash bill, pay my bill, pay a bill, pay the bill, pay bill, pay my water, pay water, water account, nexbillpay, nexbill"
+      }
+    ]
   }
 }

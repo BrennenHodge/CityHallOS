@@ -431,6 +431,10 @@ try:
     ok(s == 200 and '/setup/' in r['setupUrl'], 'admins create password reset links')
     s, r = admin.call('PUT', f'/{A}/settings', {'hours': 'Monday-Friday, 8 am to 5 pm'})
     ok(s == 200 and r['hours'].startswith('Monday'), 'admins change settings')
+    s, r = admin.call('PUT', f'/{A}/settings', {'services': [{'label': 'Pay your water bill', 'url': 'https://pay.example.test/tst/BillPay', 'words': 'Water bill, pay my bill'},
+                                                         {'label': 'Not secure', 'url': 'http://pay.example.test/'}]})
+    ok(s == 200 and [x['url'] for x in r['services']] == ['https://pay.example.test/tst/BillPay'] and r['services'][0]['words'] == 'water bill, pay my bill',
+       'online service links are saved, https only')
     s, _ = admin.call('PUT', f'/{A}/settings', {'hours': 'x'}, {'Origin': 'https://evil.example', 'Sec-Fetch-Site': 'cross-site'})
     ok(s == 403, 'cross-site changes with a session cookie are blocked')
 
@@ -457,6 +461,10 @@ try:
     ok(done['flags']['emergency'] and '911' in text and '555-0199' in text, 'emergencies get 911 guidance with the city\'s own numbers')
     text, done = chat(A, 'There is a big pothole on Pine Street')
     ok(done['reportType'] == 'pothole' and 'Public Works' in text, 'reported problems open the report form')
+    text, done = chat(A, 'How do I pay my water bill?')
+    ok([l['url'] for l in done['flags'].get('links', [])] == ['https://pay.example.test/tst/BillPay'], 'asking how to pay a water bill gets the direct payment link')
+    text, done = chat(B, 'How do I pay my water bill?')
+    ok(not done['flags'].get('links'), "one city's payment link isn't offered in another")
     text, done = chat(A, 'What are the rules for raising goats inside city limits?')
     ok(done['flags']['needsStaff'], 'questions with no documents are flagged for staff')
     text, done = chat(A, 'I want to build a detached garage behind my house')
@@ -603,6 +611,8 @@ try:
         ok(bool(ref), f'the texted report gets a reference number ({ref})')
         s, body = twilio('sms', From='+15555550142', Body=ref or 'x')
         ok(ref and ref in body and 'new' in body, 'texting the reference number returns its status')
+        s, body = twilio('sms', From='+15555550143', Body='How do I pay my water bill?')
+        ok('https://pay.example.test/tst/BillPay' in body, 'a text about paying a water bill gets the payment link')
         s, body = twilio('voice', From='+15555550199', CallSid='CAtest')
         ok('<Gather' in body and 'emergency' in body, 'calls are greeted and told to dial 911 for emergencies')
         s, body = twilio('voice/turn', From='+15555550199', CallSid='CAtest', SpeechResult="that's all")

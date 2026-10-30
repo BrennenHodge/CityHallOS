@@ -3,6 +3,7 @@ import { search } from './search.js';
 import { buildUserMessage, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
 import { recordsIntro, wantsRecords } from './records.js';
 import { isLicenseQuestion, licensingSources } from './licensing.js';
+import { matchServices } from './services.js';
 import { enabledForms, formList } from './permits/routes.js';
 import { detectForm } from './permits/forms/index.js';
 
@@ -30,7 +31,7 @@ export async function respond(env, city, store, { convoId, question, history = [
   const emit = async (event, data) => { if (send) await send(event, data); };
   let answer = '';
   let sources = [];
-  let flags = { needsStaff: false, offerReport: false, emergency: false, offerForm: null, offerRecords: false, offerLicense: false };
+  let flags = { needsStaff: false, offerReport: false, emergency: false, offerForm: null, offerRecords: false, offerLicense: false, links: [] };
   const online = formList(city);
   let reportType = null;
   let type = null;
@@ -113,6 +114,8 @@ export async function respond(env, city, store, { convoId, question, history = [
     flags.offerForm = [flags.formToken, detectForm(question), citedForm].find((k) => k && kinds.includes(k)) || null;
   }
   delete flags.formToken;
+  // Online services the resident asked about (paying a water bill...) get their direct link as a button.
+  if (!flags.emergency && !reportType) flags.links = matchServices(s, question);
   return { answer, sources, used: sources.filter((x) => cited.has(x.n)), cited, flags, reportType, type };
 }
 

@@ -122,8 +122,10 @@ async function sms(env, ctx, city, store, url, from, body, hooks) {
   await recordReply(env, store, convoId, r);
   // A city form links to its online application, never the PDF.
   const apply = r.flags.offerForm && `${env.APP_ORIGIN || 'https://app.cityhallos.com'}/${city.slug}/#apply=${r.flags.offerForm}`;
-  const link = apply || r.used.filter((u) => !u.form).map((u) => u.url).find((u) => /^https?:/.test(u || ''));
-  const text = brief(plain(r.answer), 600) + (link && !r.flags.emergency ? `\n\n${apply ? 'Apply online' : 'More'}: ${link}` : '');
+  // An online service the resident asked about (paying a water bill...) links straight to it.
+  const service = !apply && r.flags.links?.[0];
+  const link = apply || service?.url || r.used.filter((u) => !u.form).map((u) => u.url).find((u) => /^https?:/.test(u || ''));
+  const text = brief(plain(r.answer), 600) + (link && !r.flags.emergency ? `\n\n${apply ? 'Apply online' : service ? service.label : 'More'}: ${link}` : '');
   return twiml(`<Message>${xmlEsc(text.slice(0, 1500))}</Message>`);
 }
 

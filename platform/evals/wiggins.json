@@ -2,7 +2,7 @@
   "city": "wiggins",
   "notes": "Questions residents ask, with what a good answer must do. 'sources' passes if any listed title fragment is among the cited sources. 'expect' is answer, needs_staff, emergency or report.",
   "cases": [
-    { "q": "How do I pay my water bill?", "sources": ["Online Payments"], "include": ["601-928-7221"], "expect": "answer" },
+    { "q": "How do I pay my water bill?", "include": ["nexbillpay.net/cityofwigginsms"], "expect": "answer" },
     { "q": "Can I pay my water bill online?", "sources": ["Online Payments"], "expect": "answer" },
     { "q": "What's the phone number for City Hall?", "include": ["601-928-7221"], "expect": "answer" },
     { "q": "Where is City Hall?", "include": ["First Street"], "expect": "answer" },

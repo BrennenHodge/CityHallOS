@@ -348,6 +348,7 @@
         <a class="src" href="${esc(absolute(s.url))}" target="_blank" rel="noopener"><span class="n">${s.n}</span><span><strong>${esc(s.title)}</strong>
         <small>${esc(s.category || '')}${s.as_of ? ` · ${esc(s.as_of)}` : ''}${VERIFY_NOTE[s.verification] && s.verification !== 'official_unverified' ? `<span class="tag">${VERIFY_NOTE[s.verification]}</span>` : ''}</small></span></a>`)).join('')}</div>` : ''}
       ${f.emergency ? `<div class="actions"><a class="btn danger" href="tel:911">${icon('phone', 15)} Call 911</a></div>` : ''}
+      ${f.links?.length ? `<div class="actions">${f.links.map((l) => `<a class="btn primary" href="${esc(l.url)}" target="_blank" rel="noopener">${icon('ext', 15)} ${esc(l.label)}</a>`).join('')}</div>` : ''}
       ${f.offerReport && !it.reported ? `<div class="actions"><button class="btn primary" data-act="report-from" data-i="${i}">${icon('alert', 15)} Report this issue</button></div>` : ''}
       ${f.offerForm && formInfo(f.offerForm) ? `<div class="actions"><button class="btn primary" data-act="form-from" data-kind="${esc(f.offerForm)}" data-i="${i}">${icon(formInfo(f.offerForm).icon, 15)} Start my ${esc(formInfo(f.offerForm).short.toLowerCase())} application</button></div>` : ''}
       ${f.needsStaff ? `<div class="note">${icon('check', 14)} Flagged for City Hall staff to follow up.</div>` : ''}
