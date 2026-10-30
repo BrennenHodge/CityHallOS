@@ -77,6 +77,39 @@ Staff see it under **Activity** in the dashboard.
 Service requests also keep a `request_events` timeline. Status changes are shown to the resident on the
 tracking page; staff notes are not.
 
+## Channels
+
+Every channel uses the same reply logic (`src/reply.js`): the same knowledge base, emergency and report rules,
+and conversation log.
+
+- **Website chat and portal:** `public/embed.js`, streaming from `POST /api/{city}/chat`.
+- **Text messages and calls:** `src/phone.js`. Each city's Twilio number sends texts to `POST /api/{city}/twilio/sms`
+  and calls to `POST /api/{city}/twilio/voice`. Requests are checked against Twilio's signature (`TWILIO_AUTH_TOKEN`).
+  Residents can ask questions, report a problem (the reply walks them through location and details and returns a
+  reference number), check a request by texting its number, and ask for a person. Callers are transferred to City Hall
+  during office hours. Report and call state lives in `conversations.flow`.
+
+## Routing and office hours
+
+Each city sets its office hours and, per request type, who gets told about new requests during hours and after hours,
+and who new requests are assigned to (Settings in the dashboard; `request_types` in the city store). With nobody listed,
+everyone in the department with contact details is told.
+
+## Keeping knowledge current
+
+Each city store has an alarm that re-fetches a few of its documents' original web pages and files every hour, so
+every source is checked about once a week. A change is flagged under **Needs review** on the knowledge page; nothing
+is replaced automatically. Staff re-import the document and mark it **confirmed current**, which records who and when.
+Documents confirmed more than a year ago are listed for review again.
+
+## Measuring answers and results
+
+- `platform/evals/<city>.json` holds resident questions with what a good answer must do (cite the right source,
+  include or avoid phrases, end as an answer, a staff hand-off, an emergency redirect or a report).
+  `scripts/eval.py` grades the assistant against them. Run it after changing prompts, search or models.
+- The **Results** page reports questions answered without staff, estimated staff time saved (from the minutes per call
+  set in Settings), requests by type and department, and median time to first staff action and to resolution.
+
 ## Adding a city
 
 ```bash
