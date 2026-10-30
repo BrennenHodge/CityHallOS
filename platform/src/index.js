@@ -15,6 +15,7 @@ import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
 import { permitRoute, sendPermitReminders } from './permits/routes.js';
+import { DISPATCH_RESOURCES, afterRequestCreated, dispatchRoute } from './dispatch.js';
 
 export { CityStore } from './store.js';
 export { AuthService } from './auth.js';
@@ -217,6 +218,8 @@ async function route(request, env, ctx, url) {
     return json({ city: { id: city.id, slug: city.slug, name: city.name, settings: city.settings }, exported_at: now(), ...(await store.exportAll()) }, 200,
       { 'Content-Disposition': `attachment; filename="${city.slug}-export-${now().slice(0, 10)}.json"` });
   }
+  // Public Works dispatcher: dispatch board, crews, work orders, map and field view (dispatch.js).
+  if (DISPATCH_RESOURCES.has(res)) return dispatchRoute(request, { env, ctx, url, city, store, me, need, json, fail, parts });
   return fail(404, 'Not found');
 }
 
@@ -621,6 +624,7 @@ async function createRequest(request, env, ctx, city, store, me) {
     await store.setRequestPhoto(created.id, key);
   }
   ctx.waitUntil(requestCreated(env, city, store, created.id).catch((e) => console.log('request alerts failed', e.message)));
+  ctx.waitUntil(afterRequestCreated(env, city, store));
   return json({ ref: created.ref, department: created.department, status: 'new' }, 201);
 }
 
@@ -631,7 +635,7 @@ async function trackRequest(store, ref) {
     return p ? json(p) : fail(404, 'No permit application with that number');
   }
   const r = await store.trackRequest(ref);
-  return r ? json(r) : fail(404, 'No request with that number');
+  return r ? json({ ...r, ...(await store.workSchedule(r.ref)) }) : fail(404, 'No request with that number');
 }
 
 async function listRequests(store, me) {

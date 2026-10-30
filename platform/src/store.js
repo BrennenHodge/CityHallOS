@@ -4,6 +4,7 @@
 // Every change made by staff, residents or the AI is written to that city's append-only audit log.
 import { DurableObject } from 'cloudflare:workers';
 import { DEFAULT_DEPARTMENTS, DEFAULT_REQUEST_TYPES } from './templates.js';
+import { DISPATCH_MIGRATION, DISPATCH_TABLES, dispatchMethods } from './dispatch-store.js';
 
 const now = () => new Date().toISOString();
 const uid = (p) => p + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
@@ -290,6 +291,8 @@ const MIGRATIONS = [
   ALTER TABLE conversations ADD COLUMN flow TEXT;
   CREATE INDEX conversations_contact ON conversations (channel, contact, last_at);
   `,
+  // Public Works dispatcher: crews, work orders, geocoded locations and the dispatcher's suggestions (dispatch-store.js).
+  DISPATCH_MIGRATION,
 ];
 
 const PERMIT_JSON = ['data', 'asked', 'screen', 'checks', 'review', 'contact'];
@@ -1064,7 +1067,8 @@ export class CityStore extends DurableObject {
   // Everything this city has, for backups or when a city wants its data.
   exportAll() {
     const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events',
-      'permits', 'permit_files', 'permit_events', 'outbox', 'audit_log'];
+      'permits', 'permit_files', 'permit_events', 'outbox', 'audit_log',
+      ...DISPATCH_TABLES];
     return Object.fromEntries(tables.map((t) => [t, this.all(`SELECT * FROM ${t}`)
       .map(({ token_hash, ...r }) => r)]));
   }
@@ -1141,3 +1145,6 @@ export class CityStore extends DurableObject {
     return { ...this.stats(), filesMoved: moved.size };
   }
 }
+
+// Crews, work orders and the dispatch board run in the same store as the requests they schedule.
+Object.assign(CityStore.prototype, dispatchMethods);

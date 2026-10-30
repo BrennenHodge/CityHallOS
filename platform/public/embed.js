@@ -427,6 +427,9 @@
 
   /* ---------------- Track ---------------- */
 
+  // Timestamps are ISO ("…Z"); requests moved from the original database used "YYYY-MM-DD HH:MM:SS" in UTC.
+  const stamp = (s) => new Date(/Z$/.test(s) ? s : `${s.replace(' ', 'T')}Z`);
+
   async function track(ref) {
     const item = bot('', { pending: true });
     try {
@@ -447,12 +450,18 @@
         return;
       }
       const at = Math.max(0, STEPS.indexOf(r.status === 'closed' ? 'resolved' : r.status === 'needs_info' ? 'new' : r.status === 'awaiting_review' ? 'in_progress' : r.status));
-      card(`<div class="ref">${esc(r.ref)}</div><h3>${esc(STATUS[r.status] || r.status)}</h3>
+      // Field work adds "Scheduled for <date>" and "Completed on <date>" to the public updates.
+      const when = r.scheduled_for && new Date(`${r.scheduled_for}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+      const latest = (r.updates || []).at(-1)?.note;
+      const title = r.status === 'resolved' ? 'Completed' : when && r.status === 'assigned' ? `Scheduled for ${when}` : STATUS[r.status] || r.status;
+      card(`<div class="ref">${esc(r.ref)}</div><h3>${esc(title)}</h3>
         <div class="progress">${STEPS.map((s, i) => `<i class="${i <= at ? 'on' : ''}"></i>`).join('')}</div>
         <div class="row"><b>Issue</b><span>${esc(r.category)}</span></div>
         <div class="row"><b>Department</b><span>${esc(r.department)}</span></div>
-        <div class="row"><b>Reported</b><span>${new Date(r.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</span></div>
-        <div class="row"><b>Last update</b><span>${new Date(r.updated_at.replace(' ', 'T') + 'Z').toLocaleString()}</span></div>`);
+        ${when ? `<div class="row"><b>Scheduled</b><span>${esc(when)}</span></div>` : ''}
+        ${latest && latest !== title ? `<div class="row"><b>Latest</b><span>${esc(latest)}</span></div>` : ''}
+        <div class="row"><b>Reported</b><span>${stamp(r.created_at).toLocaleDateString()}</span></div>
+        <div class="row"><b>Last update</b><span>${stamp(r.updated_at).toLocaleString()}</span></div>`);
     } catch {
       item.pending = false; item.text = 'I could not check that right now. Please try again in a moment.'; persist(); drawLog();
     }

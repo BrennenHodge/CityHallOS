@@ -273,6 +273,7 @@
             ${navGroup('', ['overview', 'report'])}
             ${navGroup('Brain', ['knowledge', 'assistant'])}
             ${navGroup('Residents', [['conversations', 'navReview'], ['requests', 'navReq'], ['permits', 'navPermits']])}
+            ${[...new Set(PAGES.map((p) => p.group))].filter((g) => !['', 'Brain', 'Residents', 'Setup'].includes(g)).map((g) => navGroup(g, [])).join('')}
             ${navGroup('Setup', ['channels', 'staff', 'activity', 'settings'])}
             ${navGroup('City Hall OS', ['platform'])}
           </nav>
@@ -302,9 +303,12 @@
     window.onhashchange = route;
     route();
     refreshBadges();
+    SHELL_HOOKS.forEach((fn) => fn());
   }
 
+  // Built-in pages, then any feature pages registered for this group (see window.CHOS below).
   function navGroup(label, items) {
+    items = [...items, ...PAGES.filter((p) => p.group === label).map((p) => [p.key, p.badge])];
     const links = items.map((it) => (Array.isArray(it) ? it : [it])).filter(([key]) => allowed(key)).map(([key, badge]) => navLink(key, badge));
     return links.length ? `${label ? `<div class="nav-label">${label}</div>` : ''}${links.join('')}` : '';
   }
@@ -943,6 +947,7 @@
     if (r.photo) {
       fetch(`${API}/requests/${r.id}/photo`).then((res) => res.blob()).then((b) => { $('#rPhoto').src = URL.createObjectURL(b); });
     }
+    DRAWER_HOOKS.forEach((fn) => fn(d, r));
     if (!edit) return;
     d.querySelector('.status-steps').onclick = (e) => {
       const b = e.target.closest('[data-status]'); if (!b) return;
@@ -1485,6 +1490,29 @@ POST /api/${CITY}/documents         staff: add files, web pages or answers</div>
     $('#aTypes').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; state.auditType = c.dataset.v; renderActivity(page); };
     $('#aMore')?.addEventListener('click', () => renderActivity(page, true));
   }
+
+  /* ---------------- Feature modules ---------------- */
+
+  // Features live in their own files (public/<feature>.js), loaded after this one, and plug in through window.CHOS.
+  const PAGES = [];
+  const SHELL_HOOKS = [];
+  const DRAWER_HOOKS = [];
+  window.CHOS = {
+    $, $$, api, esc, icon, pill, ago, toast, modal, openDrawer, closeDrawer, can, md, emptyNote, kpi, toDate, fmt, REQ_STATUS, openRequest, refreshBadges,
+    get state() { return state; },
+    get apiBase() { return API; },
+    // A page in the sidebar: route is { title, sub, icon, render, perm }; group is a nav label, new or existing.
+    addPage(key, route, group, badgeId) {
+      ROUTES[key] = route;
+      PAGES.push({ key, group, badge: badgeId });
+      if (state.city) renderShell(); // registered after sign-in finished
+    },
+    onShell(fn) { SHELL_HOOKS.push(fn); },
+    // Adds to the service request drawer: fn(drawer, request) after it opens.
+    onRequestDrawer(fn) { DRAWER_HOOKS.push(fn); },
+    addAuditType(value, label) { AUDIT_TYPES.push([value, label]); },
+    rerender: () => route(),
+  };
 
   window.addEventListener('hashchange', () => { if (!state.me && /^#\/setup\//.test(location.hash)) boot(); });
   boot();

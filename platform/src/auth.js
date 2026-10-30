@@ -15,14 +15,14 @@ export const ROLES = {
   },
   department: {
     label: 'Department staff',
-    description: "Works their own department's service requests, and permit applications in the permit department",
+    description: "Works their own department's service requests and crews, and permit applications in the permit department",
     perms: ['overview', 'knowledge.view', 'assistant.test', 'conversations.view', 'requests.view', 'requests.edit', 'requests.create', 'report.view',
-      'permits.view', 'permits.edit', 'residents.contact'],
+      'permits.view', 'permits.edit', 'residents.contact', 'dispatch.view', 'dispatch.manage'],
   },
   viewer: {
     label: 'Viewer',
     description: 'Can see the dashboard but not change anything',
-    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'permits.view', 'channels.view', 'report.view'],
+    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'permits.view', 'channels.view', 'report.view', 'dispatch.view'],
   },
 };
 
