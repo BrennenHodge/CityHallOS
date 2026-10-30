@@ -1,6 +1,7 @@
 // The AI City Clerk's reply to a resident, shared by the website chat, text messages and phone calls.
 import { search } from './search.js';
 import { buildUserMessage, detectPermit, detectReport, generate, isEmergency, modelName, systemPrompt, tokenFilter } from './assistant.js';
+import { recordsIntro, wantsRecords } from './records.js';
 
 // A one-line summary staff see on a request card.
 export function summarize(label, location, description) {
@@ -26,13 +27,21 @@ export async function respond(env, city, store, { convoId, question, history = [
   const emit = async (event, data) => { if (send) await send(event, data); };
   let answer = '';
   let sources = [];
-  let flags = { needsStaff: false, offerReport: false, emergency: false, offerPermit: false };
+  let flags = { needsStaff: false, offerReport: false, emergency: false, offerPermit: false, offerRecords: false };
   let reportType = null;
   let type = null;
   try {
     const emergency = isEmergency(question);
-    type = emergency ? null : (await store.requestTypes()).find((t) => t.key === detectReport(question)) || null;
-    if (type) {
+    flags.offerRecords = !emergency && wantsRecords(question);
+    type = emergency || flags.offerRecords ? null : (await store.requestTypes()).find((t) => t.key === detectReport(question)) || null;
+    if (flags.offerRecords) {
+      // Public records requests have their own form (records.js): the website chat opens it, texts and calls get the link.
+      answer = ['web', 'staff-test'].includes(channel)
+        ? recordsIntro(s)
+        : `You can request public records from the City of ${s.shortName} online at ${env.APP_ORIGIN || 'https://app.cityhallos.com'}/records?city=${city.slug}. You'll get a tracking number and a link to follow your request.`;
+      await emit('meta', { convoId, sources: [] });
+      await emit('delta', { t: answer });
+    } else if (type) {
       reportType = type.key;
       flags.offerReport = true;
       answer = channel === 'web'
@@ -87,7 +96,7 @@ export async function respond(env, city, store, { convoId, question, history = [
     await emit('delta', { t: msg }).catch(() => {});
   }
   // Building questions on the website can open the guided permit application.
-  flags.offerPermit = ['web', 'staff-test'].includes(channel) && !flags.emergency && !reportType && s.permits?.construction?.enabled !== false && !!detectPermit(question);
+  flags.offerPermit = ['web', 'staff-test'].includes(channel) && !flags.emergency && !reportType && !flags.offerRecords && s.permits?.construction?.enabled !== false && !!detectPermit(question);
   const cited = citedNumbers(answer);
   return { answer, sources, used: sources.filter((x) => cited.has(x.n)), cited, flags, reportType, type };
 }
@@ -98,7 +107,7 @@ export async function recordReply(env, store, convoId, r) {
     convoId, answer: r.answer,
     sources: (r.used.length ? r.used : r.sources.slice(0, 3)).map(({ score, excerpt, ...x }) => x),
     flag: r.flags.emergency ? 'emergency' : r.flags.needsStaff ? 'needs_staff' : r.flags.offerReport ? 'report' : null,
-    model: r.flags.emergency || r.reportType ? 'rule' : modelName(env),
+    model: r.flags.emergency || r.reportType || r.flags.offerRecords ? 'rule' : modelName(env),
     status: r.flags.emergency ? 'emergency' : r.flags.needsStaff ? 'needs_review' : null,
     citedDocIds: r.used.filter((u) => u.docId).map((u) => u.docId),
   });

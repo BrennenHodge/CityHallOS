@@ -1,5 +1,5 @@
 """End-to-end checks for the City Hall OS API: sign-in, roles, department scoping, contact redaction,
-city isolation, the knowledge base, service requests, the Public Works dispatcher, the AI City Clerk, meetings and the audit log.
+city isolation, the knowledge base, service requests, the Public Works dispatcher, public records requests, the AI City Clerk, meetings and the audit log.
 
 Usage: python -I test_api.py <origin> <key_file>
   python -I platform/scripts/test_api.py http://127.0.0.1:8787 platform/.dev.vars
@@ -54,6 +54,28 @@ def upload_photo(c, path, kind):
             f'--{b}\r\nContent-Disposition: form-data; name="photo"; filename="{kind}.png"\r\nContent-Type: image/png\r\n\r\n').encode() + png + f'\r\n--{b}--\r\n'.encode()
     s, _, data = raw(c, 'POST', path, body, {'Content-Type': f'multipart/form-data; boundary={b}'})
     return s, json.loads(data or b'{}')
+
+
+def raw_get(api, path):
+    """GET a non-JSON response: (status, body bytes, headers)."""
+    h = {'User-Agent': 'CityHallOS-scripts/1.0', **({'Authorization': f'Bearer {api.key}'} if api.key else {})}
+    try:
+        with api.opener.open(urllib.request.Request(ORIGIN + '/api' + path, headers=h), timeout=60) as r:
+            return r.status, r.read(), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), dict(e.headers)
+
+
+def upload_file(api, path, name, data):
+    """POST one file as multipart/form-data."""
+    boundary = 'chos' + secrets.token_hex(8)
+    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: text/plain\r\n\r\n').encode() + data + f'\r\n--{boundary}--\r\n'.encode()
+    h = {'User-Agent': 'CityHallOS-scripts/1.0', 'Content-Type': f'multipart/form-data; boundary={boundary}', **({'Authorization': f'Bearer {api.key}'} if api.key else {})}
+    try:
+        with api.opener.open(urllib.request.Request(ORIGIN + '/api' + path, data=body, method='POST', headers=h), timeout=120) as r:
+            return r.status, json.loads(r.read() or b'{}')
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b'{}')
 
 
 operator = Api(ORIGIN, KEY)
@@ -258,6 +280,142 @@ try:
     s, _ = editor.call('POST', f'/{A}/staff', {'name': 'X'})
     ok(s == 403, "editor can't manage staff")
 
+    # Public records requests (Mississippi rules: 7 working days, 14 with a written explanation).
+    s, rs = admin.call('GET', f'/{A}/records/settings')
+    ok(s == 200 and rs['statute'] == 'Miss. Code Ann. § 25-61-5' and rs['responseDays'] == 7 and rs['extensionDays'] == 14 and rs['confirmed'],
+       'Mississippi cities start with the Public Records Act deadline')
+    s, a = anon.call('POST', f'/{A}/records/assist', {'records': 'all emails'})
+    ok(s == 200 and not a['clear'] and len(a['questions']) >= 2, 'vague records requests get narrowing questions')
+    s, a = anon.call('POST', f'/{A}/records/assist', {'records': 'Minutes of Board of Aldermen meetings about the water tower', 'date_from': '2025-01-01', 'date_to': '2025-06-30'})
+    ok(s == 200 and a['clear'], 'specific records requests pass the scope check')
+    s, _ = anon.call('POST', f'/{A}/records', {'records': 'Water tower contracts', 'name': 'No Contact'})
+    ok(s == 400, 'records requests need a way to reach the requester')
+    s, pr = anon.call('POST', f'/{A}/records', {'records': 'Minutes and contracts about the water tower repairs', 'date_from': '2025-01-01', 'date_to': '2025-12-31',
+                                                 'format': 'electronic', 'name': 'Rhonda Requester', 'email': 'rhonda@example.test', 'phone': '555-0142'})
+    ok(s == 201 and pr.get('ref') == 'TST-PRR-1001' and pr.get('key') and '/records?city=' in pr.get('trackUrl', ''), f"records requests are numbered TST-PRR-1001 ({pr.get('ref')})")
+    s, t = anon.call('GET', f'/{A}/records/track/TST-PRR-1001')
+    ok(s == 200 and t['status'] == 'new' and 'records' not in t and 'letters' not in t and t['due_date'] == pr['due'], 'tracking by number alone shows status and due date only')
+    s, t = anon.call('GET', f"/{A}/records/track/TST-PRR-1001?key={pr['key']}")
+    ok(s == 200 and t['verified'] and t['records'].startswith('Minutes'), "the requester's private link shows the full request")
+    s, _ = anon.call('GET', f'/{B}/records/track/TST-PRR-1001')
+    ok(s == 404, "one city's records requests don't resolve in another")
+
+    # Deadlines count working days and skip weekends and Mississippi holidays (Memorial Day, Confederate Memorial Day).
+    def log_request(who, received, **extra):
+        return who.call('POST', f'/{A}/records', {'records': 'Police incident reports for 100 Pine Street', 'name': 'Mail Requester', 'address': '1 Main St',
+                                                   'source': 'mail', 'received': received, **extra})
+    s, m1 = log_request(editor, '2026-05-22')
+    ok(s == 201 and m1['due'] == '2026-06-03', f"7 working days from Fri 2026-05-22 skip Memorial Day: due {m1.get('due')}")
+    s, m2 = log_request(editor, '2026-04-24')
+    ok(m2.get('due') == '2026-05-06', f"Confederate Memorial Day is not a working day: due {m2.get('due')}")
+    s, _ = log_request(editor, '2099-01-05')
+    ok(s == 400, "a request can't be dated in the future")
+    s, _ = works.call('GET', f'/{A}/records')
+    ok(s == 403, "department staff don't see records requests")
+    s, r = viewer.call('GET', f'/{A}/records')
+    row = next(x for x in r['requests'] if x['ref'] == 'TST-PRR-1001')
+    ok(s == 200 and row['name'] == 'Hidden' and row['email'] == 'Hidden', 'viewers see the queue without requester contact details')
+    s, _ = viewer.call('PATCH', f"/{A}/records/{row['id']}", {'status': 'in_progress'})
+    ok(s == 403, "viewers can't work records requests")
+    s, r = editor.call('GET', f'/{A}/records')
+    mail = next(x for x in r['requests'] if x['ref'] == m1['ref'])
+    ok(mail['deadline']['state'] == 'overdue' and mail['deadline']['left'] < 0, 'requests past their due date show as overdue')
+    s, _ = editor.call('POST', f"/{A}/records/{mail['id']}/extend", {'reason': 'Too short'})
+    ok(s == 400, 'an extension needs a written explanation')
+    s, _ = editor.call('POST', f"/{A}/records/{mail['id']}/extend", {'reason': 'The reports are archived off site and must be reviewed for exempt information.', 'due': '2026-07-30'})
+    ok(s == 400, 'extending past 14 working days needs the requester to agree')
+    s, r = editor.call('POST', f"/{A}/records/{mail['id']}/extend", {'reason': 'The reports are archived off site and must be reviewed for exempt information.'})
+    ok(s == 200 and r['request']['extended_due'] == '2026-06-12' and any(l['kind'] == 'extension' and l['status'] == 'sent' for l in r['letters']),
+       'extensions default to 14 working days from receipt and send the written explanation')
+
+    # Working a request: assign, AI suggestions, files with redaction checks, fees, letters, release.
+    rid = row['id']
+    s, r = editor.call('PATCH', f'/{A}/records/{rid}', {'assignee_id': admin_staff['id'], 'status': 'in_progress', 'note': 'Check with Public Works'})
+    ok(s == 200 and r['request']['assignee'] == 'Avery Admin' and r['request']['status'] == 'in_progress', 'knowledge editors (the clerk\'s office) work records requests')
+    s, r = anon.call('GET', f"/{A}/records/track/TST-PRR-1001?key={pr['key']}")
+    ok(not any('Public Works' in (u['note'] or '') for u in r['updates']), 'staff notes stay off the tracking page')
+    s, r = editor.call('POST', f'/{A}/documents', {'title': 'Water tower repair contract 2025', 'category': 'Budget & Finance', 'visibility': 'internal',
+                                                    'text': '# Water tower repair contract\n\nThe Board of Aldermen approved the water tower repair contract with Gulf Tank Co. '
+                                                            'on March 4, 2025. Vendor contact: 601-555-0188, billing@gulftank.example. Account number: 4400123987.'})
+    tower = r['documents'][0]
+    s, r = editor.call('POST', f'/{A}/records/{rid}/find')
+    sug = next((x for x in r.get('suggestions', []) if x['payload']['docId'] == tower['id']), None)
+    ok(s == 200 and sug and sug['status'] == 'pending', 'the AI suggests likely responsive documents from the knowledge base')
+    s, r = editor.call('POST', f"/{A}/records/{rid}/suggestions/{sug['id']}", {'decision': 'accepted'})
+    kb = next((f for f in r.get('files', []) if f['doc_id'] == tower['id']), None)
+    labels = {x['label'] for x in (kb or {}).get('flags', [])}
+    ok(s == 200 and kb and kb['status'] == 'review' and {'Email address', 'Phone number', 'Account or routing number', 'Staff-only document in the knowledge base'} <= labels,
+       f'accepted suggestions become files flagged for redaction review ({sorted(labels)})')
+    s, _ = editor.call('PATCH', f"/{A}/records/{rid}/files/{kb['id']}", {'status': 'approved'})
+    ok(s == 400, "a file can't be approved until every possible redaction is resolved")
+    editor.call('PATCH', f"/{A}/records/{rid}/files/{kb['id']}", {'status': 'withheld'})
+    s, r = upload_file(editor, f'/{A}/records/{rid}/files', 'tower-minutes.txt',
+                  b'Minutes, March 4 2025. The board approved the water tower contract. Resident John Doe, SSN 123-45-6789, spoke in favor.')
+    up = next((f for f in r.get('files', []) if f['name'] == 'tower-minutes.txt'), None)
+    ok(s == 200 and up and any(x['label'] == 'Social Security number' and '6789' in x['examples'][0] and '123-45' not in x['examples'][0] for x in up['flags']),
+       'uploaded files are checked for Social Security numbers, shown masked')
+    s, r = editor.call('PATCH', f"/{A}/records/{rid}/files/{up['id']}", {'status': 'approved', 'flags': ['redacted' for _ in up['flags']]})
+    ok(s == 200 and next(f for f in r['files'] if f['id'] == up['id'])['status'] == 'approved', 'staff resolve the redactions and approve the file')
+
+    s, _ = editor.call('PUT', f'/{A}/records/settings', {'fees': {'searchHourly': 20}})
+    ok(s == 403, "only administrators change the records rules and fee schedule")
+    s, rs = admin.call('PUT', f'/{A}/records/settings', {'fees': {'searchHourly': 20, 'perPage': 0.25}, 'closures': ['2026-12-24']})
+    ok(s == 200 and rs['fees']['searchHourly'] == 20 and rs['closures'] == ['2026-12-24'], 'administrators set the fee schedule and closure days')
+    s, r = editor.call('POST', f'/{A}/records/{rid}/fee', {'searchHours': 1.5, 'pages': 10})
+    fee_letter = next((l for l in r.get('letters', []) if l['kind'] == 'fee_estimate'), None)
+    ok(s == 200 and r['request']['fee_cents'] == 3250 and r['request']['fee_status'] == 'estimated' and fee_letter and '$32.50' in fee_letter['body'],
+       'fees are the actual cost: 1.5 hours search at $20 plus 10 pages at $0.25 = $32.50')
+    s, _ = editor.call('POST', f"/{A}/records/{rid}/letters/{fee_letter['id']}/send")
+    ok(s == 400, 'letters must be approved before they are sent')
+    editor.call('PATCH', f"/{A}/records/{rid}/letters/{fee_letter['id']}", {'status': 'approved'})
+    s, r = editor.call('POST', f"/{A}/records/{rid}/letters/{fee_letter['id']}/send")
+    ok(s == 200 and r['request']['fee_status'] == 'requested' and r['request']['status'] == 'awaiting_payment', 'sending the fee letter requests payment')
+
+    s, r = editor.call('POST', f'/{A}/records/{rid}/draft', {'kind': 'response'})
+    resp = next((l for l in r.get('letters', []) if l['kind'] == 'response'), None)
+    ok(s == 200 and resp and resp['status'] == 'draft' and 'TST-PRR-1001' in resp['body'], 'the assistant drafts the response letter for staff review')
+    s, r = editor.call('POST', f'/{A}/records/{rid}/release', {'outcome': 'fulfilled', 'letterId': resp['id']})
+    ok(s == 400 and 'letter' in r.get('error', ''), 'records are not released until the response letter is approved')
+    editor.call('PATCH', f"/{A}/records/{rid}/letters/{resp['id']}", {'status': 'approved'})
+    s, r = editor.call('POST', f'/{A}/records/{rid}/release', {'outcome': 'fulfilled', 'letterId': resp['id']})
+    ok(s == 400 and 'payment' in r.get('error', ''), 'records are not released before the fee is paid')
+    s, r = editor.call('POST', f'/{A}/records/{rid}/fee', {'action': 'paid', 'amount': '32.50', 'note': 'Check 1042'})
+    ok(s == 200 and r['request']['fee_status'] == 'paid' and r['request']['status'] == 'in_progress', 'staff record the payment')
+    s, r = editor.call('POST', f'/{A}/records/{rid}/release', {'outcome': 'fulfilled', 'letterId': resp['id']})
+    ok(s == 200 and r['request']['status'] == 'closed' and r['request']['outcome'] == 'fulfilled', 'staff release the approved records and close the request')
+    s, t = anon.call('GET', f"/{A}/records/track/TST-PRR-1001?key={pr['key']}")
+    ok([f['name'] for f in t['files']] == ['tower-minutes.txt'] and any(l['subject'] == resp['subject'] for l in t['letters']),
+       'the requester sees only the released file and the letters sent to them')
+    s, body, _ = raw_get(anon, f"/{A}/records/download/TST-PRR-1001/{up['id']}?key={pr['key']}")
+    ok(s == 200 and b'water tower contract' in body, 'the requester downloads released files with their link')
+    s, _, _ = raw_get(anon, f"/{A}/records/download/TST-PRR-1001/{up['id']}")
+    ok(s == 404, 'downloads need the private link')
+    s, _, _ = raw_get(anon, f"/{A}/records/download/TST-PRR-1001/{kb['id']}?key={pr['key']}")
+    ok(s == 404, 'withheld files are never downloadable')
+    s, _ = upload_file(editor, f'/{A}/records/{rid}/files', 'late.txt', b'Added after closing, should be refused.')
+    ok(s == 400, 'closed requests take no more files')
+
+    # Denials cite the exemption, in writing.
+    did = mail['id']
+    s, r = editor.call('POST', f'/{A}/records/{did}/draft', {'kind': 'denial', 'exemptions': ['Miss. Code Ann. § 25-61-12: law enforcement investigative records'], 'reason': 'The investigation is open.'})
+    den = next(l for l in r['letters'] if l['kind'] == 'denial')
+    ok('25-61-12' in den['body'], 'denial letters cite the exemption')
+    editor.call('PATCH', f"/{A}/records/{did}/letters/{den['id']}", {'status': 'approved'})
+    s, _ = editor.call('POST', f'/{A}/records/{did}/release', {'outcome': 'denied', 'letterId': den['id']})
+    ok(s == 400, 'a denial must cite the specific exemption')
+    s, r = editor.call('POST', f'/{A}/records/{did}/release', {'outcome': 'denied', 'letterId': den['id'], 'exemptions': ['Miss. Code Ann. § 25-61-12: law enforcement investigative records']})
+    ok(s == 200 and r['request']['outcome'] == 'denied' and r['request']['exemptions'], 'denials are recorded with the cited exemption')
+
+    s, csv, headers = raw_get(editor, f'/{A}/records/export')
+    ok(s == 200 and b'TST-PRR-1001' in csv and b'denied' in csv and 'text/csv' in headers.get('Content-Type', ''), 'the records log exports as CSV with outcomes')
+    s, r = admin.call('GET', f'/{A}/audit?type=records_request')
+    acts = {e['action'] for e in r['events']}
+    for act in ['records.create', 'records.update', 'records.extend', 'records.suggestion_accepted', 'records.file_add', 'records.file_review',
+                'records.fee_estimated', 'records.fee_requested', 'records.fee_paid', 'records.letter_sent', 'records.close', 'records.export']:
+        ok(act in acts, f'audit log records {act}')
+    e = next(e for e in r['events'] if e['action'] == 'records.fee_paid')
+    ok(e['actor_name'] == 'Eddie Editor' and e['changes']['fee_status'] == ['requested', 'paid'], 'records audit entries carry before and after values')
+
     # Managing access.
     s, _ = admin.call('PATCH', f"/{A}/staff/{admin_staff['id']}", {'role': 'viewer'})
     ok(s == 400, "admins can't change their own role")
@@ -404,6 +562,8 @@ try:
         ok({'sms', 'voice'} <= {c['channel'] for c in r['conversations']}, 'texts and calls are logged as conversations')
     else:
         print(f'SKIP text and phone checks (webhooks answered {s}: {body[:60]})')
+    text, done = chat(A, 'How do I make a public records request for police reports?')
+    ok(done['flags'].get('offerRecords') and 'Request public records' in text, 'asking for public records in the chat offers the records request')
 
     # Audit log.
     s, r = admin.call('GET', f'/{A}/audit')

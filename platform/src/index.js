@@ -12,6 +12,7 @@ import { afterHours } from './hours.js';
 import { remindStale, requestCreated, requestUpdated } from './alerts.js';
 import { STATE_NAMES, defaultSettings } from './templates.js';
 import { meetingsRoute } from './meetings.js';
+import { recordsPublic, recordsStaff } from './records.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
@@ -160,6 +161,7 @@ async function route(request, env, ctx, url) {
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
     if (res === 'twilio') return phoneRoute(request, env, ctx, city, store, url, id, sub, { isOpen: (c) => !afterHours(c), requestCreated });
     if (res === 'permits' && (id || m === 'POST')) return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
+    if (res === 'records') { const out = await recordsPublic(request, env, ctx, city, store, me, parts, url); if (out) return out; }
   }
 
   // Meetings: public agendas and minutes, and the staff tools. meetings.js checks permissions itself.
@@ -192,6 +194,7 @@ async function route(request, env, ctx, url) {
     if (id && !sub && m === 'PATCH') { need('requests.edit'); return updateRequest(request, env, ctx, city, store, id, me); }
   }
   if (res === 'permits') return permitRoute({ request, env, ctx, url, city, store, me, parts: parts.slice(2) });
+  if (res === 'records') return recordsStaff(request, env, ctx, city, store, me, need, parts, url);
   if (res === 'departments' && m === 'GET') return json({ departments: await store.departments() });
   if (res === 'departments' && (m === 'POST' || m === 'PUT')) { need('settings.edit'); return saveDepartment(request, store, id, me); }
   if (res === 'request-types') {
@@ -236,6 +239,7 @@ async function publicConfig(city, store) {
     brandColor: s.brandColor, suggestions: s.suggestions, phone: s.phone, policeNonEmergency: s.policeNonEmergency,
     requestTypes: (await store.requestTypes()).map(({ key, label }) => ({ key, label })),
     permits: s.permits?.construction?.enabled !== false,
+    modules: ['records'], // chat add-ons the widget loads: /embed-{name}.js
   }, 200, { 'Cache-Control': 'public, max-age=60' });
 }
 
