@@ -10,6 +10,7 @@ import { STATE_NAMES, defaultSettings } from './templates.js';
 import {
   ROLES, access, createSession, createSetupToken, isOperatorKey, platformAudit, sessionCookie, sessionFrom, sha256,
 } from './auth.js';
+import { DISPATCH_RESOURCES, afterRequestCreated, dispatchRoute } from './dispatch.js';
 
 export { CityStore } from './store.js';
 export { AuthService } from './auth.js';
@@ -135,7 +136,7 @@ async function route(request, env, ctx, url) {
   if (city.status !== 'suspended' || me) {
     if (res === 'config' && m === 'GET') return publicConfig(city, store);
     if (res === 'chat' && m === 'POST') return chat(request, env, ctx, city, store, me);
-    if (res === 'requests' && m === 'POST' && !id) return createRequest(request, env, city, store, me);
+    if (res === 'requests' && m === 'POST' && !id) return createRequest(request, env, city, store, me, ctx);
     if (res === 'track' && m === 'GET' && id) return trackRequest(store, id);
     if (res === 'forms' && m === 'GET') return listForms(city, store);
     if (res === 'documents' && id && sub === 'file' && m === 'GET') return documentFile(env, store, id, me);
@@ -184,6 +185,8 @@ async function route(request, env, ctx, url) {
     return json({ city: { id: city.id, slug: city.slug, name: city.name, settings: city.settings }, exported_at: now(), ...(await store.exportAll()) }, 200,
       { 'Content-Disposition': `attachment; filename="${city.slug}-export-${now().slice(0, 10)}.json"` });
   }
+  // Public Works dispatcher: dispatch board, crews, work orders, map and field view (dispatch.js).
+  if (DISPATCH_RESOURCES.has(res)) return dispatchRoute(request, { env, ctx, url, city, store, me, need, json, fail, parts });
   return fail(404, 'Not found');
 }
 
@@ -614,7 +617,7 @@ function summarize(label, location, description) {
 // Resident contact details are only shown to roles that work requests.
 const redact = (r, me) => (me.can('residents.contact') ? r : { ...r, name: r.name ? 'Hidden' : null, contact: r.contact ? 'Hidden' : null });
 
-async function createRequest(request, env, city, store, me) {
+async function createRequest(request, env, city, store, me, ctx) {
   const ct = request.headers.get('Content-Type') || '';
   let b; let photo = null;
   if (ct.includes('multipart/form-data')) {
@@ -643,12 +646,13 @@ async function createRequest(request, env, city, store, me) {
     await env.FILES.put(key, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
     await store.setRequestPhoto(created.id, key);
   }
+  ctx.waitUntil(afterRequestCreated(env, city, store));
   return json({ ref: created.ref, department: created.department, status: 'new' }, 201);
 }
 
 async function trackRequest(store, ref) {
   const r = await store.trackRequest(String(ref).toUpperCase().trim());
-  return r ? json(r) : fail(404, 'No request with that number');
+  return r ? json({ ...r, ...(await store.workSchedule(r.ref)) }) : fail(404, 'No request with that number');
 }
 
 async function listRequests(store, me) {

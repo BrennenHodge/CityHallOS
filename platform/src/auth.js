@@ -17,12 +17,12 @@ export const ROLES = {
     label: 'Department staff',
     description: "Works their own department's service requests",
     perms: ['overview', 'knowledge.view', 'assistant.test', 'conversations.view', 'requests.view', 'requests.edit', 'requests.create',
-      'residents.contact'],
+      'residents.contact', 'dispatch.view', 'dispatch.manage'],
   },
   viewer: {
     label: 'Viewer',
     description: 'Can see the dashboard but not change anything',
-    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'channels.view'],
+    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'channels.view', 'dispatch.view'],
   },
 };
 

@@ -4,6 +4,7 @@
 // Every change made by staff, residents or the AI is written to that city's append-only audit log.
 import { DurableObject } from 'cloudflare:workers';
 import { DEFAULT_DEPARTMENTS, DEFAULT_REQUEST_TYPES } from './templates.js';
+import { DISPATCH_MIGRATION, DISPATCH_TABLES, dispatchMethods } from './dispatch-store.js';
 
 const now = () => new Date().toISOString();
 const uid = (p) => p + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
@@ -192,6 +193,8 @@ const MIGRATIONS = [
   CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   `,
+  // Public Works dispatcher: crews, work orders, geocoded locations and the dispatcher's suggestions (dispatch-store.js).
+  DISPATCH_MIGRATION,
 ];
 
 const DOC_COLS = 'id, title, category, source_url, authority, visibility, verification, as_of, file_name, mime, bytes, chars, chunks, status, error, notes, created_by, updated_by, created_at, updated_at';
@@ -581,7 +584,8 @@ export class CityStore extends DurableObject {
 
   // Everything this city has, for backups or when a city wants its data.
   exportAll() {
-    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log'];
+    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log',
+      ...DISPATCH_TABLES];
     return Object.fromEntries(tables.map((t) => [t, this.all(`SELECT * FROM ${t}`)]));
   }
 
@@ -657,3 +661,6 @@ export class CityStore extends DurableObject {
     return { ...this.stats(), filesMoved: moved.size };
   }
 }
+
+// Crews, work orders and the dispatch board run in the same store as the requests they schedule.
+Object.assign(CityStore.prototype, dispatchMethods);

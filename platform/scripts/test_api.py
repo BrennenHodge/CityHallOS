@@ -1,5 +1,5 @@
 """End-to-end checks for the City Hall OS API: sign-in, roles, department scoping, contact redaction,
-city isolation, the knowledge base, service requests, the AI City Clerk and the audit log.
+city isolation, the knowledge base, service requests, the Public Works dispatcher, the AI City Clerk and the audit log.
 
 Usage: python -I test_api.py <origin> <key_file>
   python -I platform/scripts/test_api.py http://127.0.0.1:8787 platform/.dev.vars
@@ -8,7 +8,7 @@ Usage: python -I test_api.py <origin> <key_file>
 Each run creates two throwaway test cities with their own staff and archives them at the end, so it
 never touches a real city. It refuses to run against production.
 """
-import http.cookiejar, json, secrets, sys, urllib.request
+import datetime, http.cookiejar, json, secrets, sys, urllib.error, urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,6 +35,25 @@ def session():
 
 def password():
     return 'Test-' + secrets.token_urlsafe(12)
+
+
+def raw(c, method, path, body=None, headers=None):
+    """A request whose body or response isn't JSON (photo uploads and downloads)."""
+    req = urllib.request.Request(f'{ORIGIN}/api{path}', data=body, method=method, headers={'User-Agent': 'CityHallOS-scripts/1.0', **(headers or {})})
+    try:
+        with c.opener.open(req, timeout=60) as r:
+            return r.status, r.headers.get('Content-Type', ''), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get('Content-Type', ''), e.read()
+
+
+def upload_photo(c, path, kind):
+    png = bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cfc0f01f0005000201e2219bc30000000049454e44ae426082')
+    b = 'chos' + secrets.token_hex(8)
+    body = (f'--{b}\r\nContent-Disposition: form-data; name="kind"\r\n\r\n{kind}\r\n'
+            f'--{b}\r\nContent-Disposition: form-data; name="photo"; filename="{kind}.png"\r\nContent-Type: image/png\r\n\r\n').encode() + png + f'\r\n--{b}--\r\n'.encode()
+    s, _, data = raw(c, 'POST', path, body, {'Content-Type': f'multipart/form-data; boundary={b}'})
+    return s, json.loads(data or b'{}')
 
 
 operator = Api(ORIGIN, KEY)
@@ -104,6 +123,120 @@ try:
     s, _ = viewer.call('POST', f'/{A}/documents', {'text': 'x' * 50, 'title': 'Nope'})
     ok(s == 403, "viewer can't add documents")
 
+    # Public Works dispatcher: crews, the dispatch board and its suggestions, work orders, the field view and the map.
+    s, r = admin.call('POST', f'/{A}/staff', {'name': 'Sam Water', 'department_id': 'water-sewer', 'title': 'Operator'})
+    water_staff = r['staff']
+    s, r = works.call('POST', f'/{A}/crews', {'name': 'Street Crew', 'members': [works_staff['id']], 'lead_id': works_staff['id']})
+    crew = r.get('crew') or {}
+    ok(s == 201 and crew.get('department_id') == 'public-works' and [m['name'] for m in crew['members']] == ['Pat Works'], 'department staff create a crew in their own department')
+    s, _ = works.call('POST', f'/{A}/crews', {'name': 'Not mine', 'department_id': 'water-sewer'})
+    ok(s == 403, "department staff can't create another department's crew")
+    s, r = admin.call('POST', f'/{A}/crews', {'name': 'Water Crew', 'department_id': 'water-sewer', 'members': [water_staff['id']]})
+    wcrew = r['crew']
+    s, _ = works.call('PATCH', f"/{A}/crews/{wcrew['id']}", {'name': 'Taken over'})
+    ok(s == 403, "department staff can't change another department's crew")
+    s, r = works.call('PATCH', f"/{A}/crews/{crew['id']}", {'members': [works_staff['id'], admin_staff['id']]})
+    ok(s == 200 and len(r['crew']['members']) == 2, 'crews are made of people from the staff directory')
+    s, _ = viewer.call('POST', f'/{A}/crews', {'name': 'Viewers'})
+    ok(s == 403, "viewers can't manage crews")
+
+    s, near1 = anon.call('POST', f'/{A}/requests', {'category': 'pothole', 'description': 'Pothole by the school, kids walk past it', 'location': 'GPS 30.86000, -89.13000',
+                                                     'name': 'Ann Resident', 'contact': 'ann@example.test'})
+    s, near2 = anon.call('POST', f'/{A}/requests', {'category': 'pothole', 'description': 'Big hole in the road', 'location': 'GPS 30.86010, -89.13005', 'contact': '601-555-0144'})
+    s, nowhere = anon.call('POST', f'/{A}/requests', {'category': 'sign', 'description': 'Stop sign bent over', 'location': 'Behind the old feed store'})
+    s, b = works.call('GET', f'/{A}/dispatch/board')
+    today = datetime.date.fromisoformat(b['today'])
+    tomorrow, later = (today + datetime.timedelta(days=1)).isoformat(), (today + datetime.timedelta(days=2)).isoformat()
+    refs = {x['ref'] for x in b['unscheduled']}
+    ok(s == 200 and {near1['ref'], near2['ref'], 'TST-1001'} <= refs and 'TST-1002' not in refs, "the board shows my department's unscheduled requests only")
+    ok([d['id'] for d in b['departments']] == ['public-works'] and [c['name'] for c in b['crews']] == ['Street Crew'], 'department staff dispatch only their own crews')
+    sug = {(x['ref'], x['kind']): x for x in b['suggestions']}
+    dup = sug.get((near2['ref'], 'duplicate'))
+    ok(dup and dup['data']['ref'] == near1['ref'] and dup['data']['metres'] < 20, f"the dispatcher flags a likely duplicate near the same spot ({dup and dup['reason']})")
+    pri = sug.get((near1['ref'], 'priority'))
+    ok(pri and pri['value'] == 'high', 'the dispatcher suggests a higher priority for a safety concern')
+    crew_sug = sug.get((near1['ref'], 'crew'))
+    ok(crew_sug and crew_sug['value'] == crew['id'] and crew_sug['data']['date'] > b['today'], 'the dispatcher suggests a crew and a day')
+    s, r = viewer.call('GET', f'/{A}/dispatch/board')
+    ok(s == 200 and all(x['contact'] in (None, 'Hidden') for x in r['unscheduled']), 'viewers see the board without resident contact details')
+    s, _ = editor.call('GET', f'/{A}/dispatch/board')
+    ok(s == 403, "knowledge editors don't see the dispatch board")
+    s, r = admin.call('GET', f'/{A}/dispatch/board')
+    ok({'public-works', 'water-sewer'} <= {d['id'] for d in r['departments']}, 'administrators dispatch for every department')
+    wsug = next((x for x in r['suggestions'] if x['ref'] == 'TST-1002' and x['kind'] == 'crew'), None)
+    s, _ = works.call('POST', f"/{A}/dispatch/suggestions/{wsug['id']}", {'decision': 'accept'})
+    ok(s == 403, "department staff can't act on another department's suggestions")
+
+    s, r = works.call('POST', f"/{A}/dispatch/suggestions/{dup['id']}", {'decision': 'accept'})
+    s2, t = anon.call('GET', f"/{A}/track/{near2['ref']}")
+    ok(s == 200 and t['status'] == 'closed' and any(near1['ref'] in (u['note'] or '') for u in t['updates']), 'accepting a duplicate closes it and tells the resident which report covers it')
+    s, r = works.call('POST', f"/{A}/dispatch/suggestions/{pri['id']}", {'decision': 'accept'})
+    s, r = works.call('GET', f'/{A}/requests')
+    ok(next(x for x in r['requests'] if x['ref'] == near1['ref'])['priority'] == 'high', 'accepting a priority suggestion changes the priority')
+    old = next((x for x in b['suggestions'] if x['ref'] == 'TST-1001' and x['kind'] == 'priority'), None)
+    s, _ = works.call('POST', f"/{A}/dispatch/suggestions/{old['id']}", {'decision': 'dismiss'})
+    s, b = works.call('GET', f'/{A}/dispatch/board')
+    ok(not any(x['ref'] == 'TST-1001' and x['kind'] == 'priority' for x in b['suggestions']), 'a dismissed suggestion is not made again')
+    s, _ = works.call('POST', f"/{A}/dispatch/suggestions/{dup['id']}", {'decision': 'dismiss'})
+    ok(s == 400, 'a suggestion can only be decided once')
+
+    s, r = works.call('POST', f"/{A}/dispatch/suggestions/{crew_sug['id']}", {'decision': 'accept', 'date': tomorrow})
+    wo_near = r.get('workOrder') or {}
+    ok(s == 200 and wo_near.get('ref') == 'WO-1001' and wo_near['scheduled_date'] == tomorrow and wo_near['crew'] == 'Street Crew', 'accepting a crew suggestion schedules a work order')
+    s, t = anon.call('GET', f"/{A}/track/{near1['ref']}")
+    ok(t['status'] == 'assigned' and t['scheduled_for'] == tomorrow and any((u['note'] or '').startswith('Scheduled for') for u in t['updates']),
+       'residents tracking the request see "scheduled for" the date')
+    s, r = works.call('POST', f'/{A}/work-orders', {'request_id': pid, 'crew_id': crew['id'], 'scheduled_date': b['today'], 'materials': '2 bags cold patch', 'labor_notes': 'Two people, one hour'})
+    wo = r.get('workOrder') or {}
+    ok(s == 201 and wo.get('materials') == '2 bags cold patch' and wo['status'] == 'scheduled', 'department staff schedule a work order with materials and labor notes')
+    s, _ = works.call('POST', f'/{A}/work-orders', {'request_id': water['id'], 'scheduled_date': b['today']})
+    ok(s == 403, "department staff can't schedule another department's work")
+    s, _ = admin.call('POST', f'/{A}/work-orders', {'request_id': pid, 'crew_id': wcrew['id']})
+    ok(s == 400, "a work order can't go to another department's crew")
+    s, _ = works.call('POST', f'/{A}/work-orders', {'request_id': pid, 'scheduled_date': '2026-02-30'})
+    ok(s == 400, 'work orders need a real date')
+
+    s, f = works.call('GET', f'/{A}/field')
+    ok(s == 200 and f['mine'] and [w['ref'] for w in f['workOrders']] == [wo['ref']], "the field view shows my crew's work today")
+    s, f = works.call('GET', f'/{A}/field?date={tomorrow}')
+    ok({w['ref'] for w in f['workOrders']} == {wo['ref'], wo_near['ref']}, "tomorrow's field view includes unfinished work from today")
+    s, mp = works.call('GET', f'/{A}/dispatch/map')
+    pts = {x['ref']: x for x in mp['located']}
+    ok(near1['ref'] in pts and pts[near1['ref']]['located_by'] == 'gps' and pts[near1['ref']]['workOrders'][0]['ref'] == wo_near['ref'], 'the map places GPS reports with their work orders')
+    spot = next((x for x in mp['located'] + mp['unlocated'] if x['ref'] == nowhere['ref']), None)
+    ok(spot and spot['located_by'] in ('pending', 'not_found', 'geocoded') and 'TST-1002' not in pts, 'typed addresses are geocoded or listed without a location')
+
+    s, r = works.call('PATCH', f"/{A}/work-orders/{wo['id']}", {'status': 'done'})
+    ok(s == 400, 'a job needs a photo or a note to be marked done')
+    s, r = works.call('PATCH', f"/{A}/work-orders/{wo['id']}", {'status': 'in_progress', 'labor_hours': 1.5})
+    ok(s == 200 and r['workOrder']['status'] == 'in_progress' and r['workOrder']['labor_hours'] == 1.5, 'crews start a job')
+    s, r = upload_photo(works, f"/{A}/work-orders/{wo['id']}/photos", 'after')
+    ok(s == 201 and r['workOrder']['photo_list'][0]['kind'] == 'after', 'crews add an after photo')
+    photo = r['workOrder']['photo_list'][0]['id']
+    s, r = works.call('PATCH', f"/{A}/work-orders/{wo['id']}", {'status': 'done'})
+    s2, t = anon.call('GET', f'/{A}/track/TST-1001')
+    ok(s == 200 and t['status'] == 'resolved' and t['updates'][-1]['note'].startswith('Completed'), 'finishing the only job resolves the request, and residents see "completed"')
+    s, ctype, data = raw(viewer, 'GET', f"/{A}/work-orders/{wo['id']}/photos/{photo}")
+    ok(s == 200 and ctype == 'image/png' and data[:4] == b'\x89PNG', 'staff see the crew photos')
+    s, _, _ = raw(editor, 'GET', f"/{A}/work-orders/{wo['id']}/photos/{photo}")
+    ok(s == 403, "roles without the dispatch board can't see crew photos")
+
+    s, r = works.call('PATCH', f"/{A}/work-orders/{wo_near['id']}", {'scheduled_date': later})
+    s2, t = anon.call('GET', f"/{A}/track/{near1['ref']}")
+    ok(t['scheduled_for'] == later and t['updates'][-1]['note'].startswith('Rescheduled for'), 'residents see a new date when work is rescheduled')
+    s, r = admin.call('POST', f'/{A}/work-orders', {'request_id': water['id'], 'crew_id': wcrew['id'], 'scheduled_date': b['today'], 'title': 'Dig and repair'})
+    first = r['workOrder']
+    s, r = admin.call('POST', f'/{A}/work-orders', {'request_id': water['id'], 'crew_id': wcrew['id'], 'scheduled_date': later, 'title': 'Restore pavement'})
+    second = r['workOrder']
+    admin.call('PATCH', f"/{A}/work-orders/{first['id']}", {'status': 'done', 'completion_note': 'Replaced 4 ft of service line'})
+    s, t = anon.call('GET', f'/{A}/track/TST-1002')
+    ok(t['status'] == 'in_progress', 'a request with unfinished work orders stays in progress')
+    admin.call('PATCH', f"/{A}/work-orders/{second['id']}", {'status': 'done', 'completion_note': 'Patched'})
+    s, t = anon.call('GET', f'/{A}/track/TST-1002')
+    ok(t['status'] == 'resolved', 'the request is resolved when all of its work orders are done')
+    s, r = works.call('GET', f"/{A}/work-orders?request_id={water['id']}")
+    ok(s == 404, "department staff can't open another department's work orders")
+
     # Knowledge base.
     s, r = editor.call('POST', f'/{A}/documents', {'title': 'When does the Board of Aldermen meet?', 'category': 'FAQs', 'authority': 'staff-note',
                                                     'text': '# Board meetings\n\nThe Board of Aldermen meets the first and third Tuesday of each month at 6 pm at City Hall.'})
@@ -171,14 +304,18 @@ try:
     s, r = admin.call('GET', f'/{A}/audit')
     acts = {e['action'] for e in r['events']}
     for a in ['city.create', 'request.create', 'request.update', 'document.create', 'document.update', 'document.delete',
-              'staff.create', 'access.role', 'access.revoke', 'access.setup_link', 'settings.update']:
+              'staff.create', 'access.role', 'access.revoke', 'access.setup_link', 'settings.update',
+              'crew.create', 'crew.update', 'work_order.create', 'work_order.update', 'work_order.photo', 'dispatch.suggest', 'dispatch.accept', 'dispatch.dismiss']:
         ok(a in acts, f'audit log records {a}')
+    e = next(e for e in r['events'] if e['action'] == 'work_order.update' and (e['changes'] or {}).get('status') == ['in_progress', 'done'])
+    ok(e['actor_name'] == 'Pat Works', 'work order changes are audited with who and the before and after values')
+    ok(all(e['actor_type'] == 'ai' for e in r['events'] if e['action'] == 'dispatch.suggest'), "the dispatcher's suggestions are recorded as the AI's")
     e = next(e for e in r['events'] if e['action'] == 'document.update')
     ok(e['actor_name'] == 'Eddie Editor' and e['changes']['verification'] == ['verified_current', 'historical'], 'audit entries name the person and the before and after values')
     s, _ = works.call('GET', f'/{A}/audit')
     ok(s == 403, "department staff can't read the audit log")
     s, r = admin.call('GET', f'/{A}/export')
-    ok(s == 200 and 'audit_log' in r and len(r['requests']) == 2, 'admins export the whole city')
+    ok(s == 200 and 'audit_log' in r and len(r['requests']) == 5 and len(r['work_orders']) == 4, 'admins export the whole city')
 finally:
     for slug in (A, B):
         operator.call('PUT', f'/platform/cities/{slug}/status', {'status': 'archived'})
