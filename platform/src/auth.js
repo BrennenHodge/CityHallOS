@@ -9,20 +9,20 @@ export const ROLES = {
   },
   editor: {
     label: 'Knowledge editor',
-    description: 'Manages the knowledge base and reviews conversations',
+    description: 'Manages the knowledge base, reviews conversations, and keeps agendas and minutes',
     perms: ['overview', 'knowledge.view', 'knowledge.edit', 'assistant.test', 'conversations.view', 'conversations.review',
-      'requests.view', 'channels.view', 'audit.view'],
+      'requests.view', 'channels.view', 'audit.view', 'meetings.view', 'meetings.submit', 'meetings.manage', 'meetings.approve'],
   },
   department: {
     label: 'Department staff',
     description: "Works their own department's service requests",
     perms: ['overview', 'knowledge.view', 'assistant.test', 'conversations.view', 'requests.view', 'requests.edit', 'requests.create',
-      'residents.contact'],
+      'residents.contact', 'meetings.view', 'meetings.submit'],
   },
   viewer: {
     label: 'Viewer',
     description: 'Can see the dashboard but not change anything',
-    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'channels.view'],
+    perms: ['overview', 'knowledge.view', 'conversations.view', 'requests.view', 'channels.view', 'meetings.view'],
   },
 };
 

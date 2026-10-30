@@ -1,5 +1,5 @@
 """End-to-end checks for the City Hall OS API: sign-in, roles, department scoping, contact redaction,
-city isolation, the knowledge base, service requests, the AI City Clerk and the audit log.
+city isolation, the knowledge base, service requests, the AI City Clerk, meetings and the audit log.
 
 Usage: python -I test_api.py <origin> <key_file>
   python -I platform/scripts/test_api.py http://127.0.0.1:8787 platform/.dev.vars
@@ -50,8 +50,8 @@ try:
     s, me = session().call('POST', '/auth/operator', {'code': KEY})
     ok(s == 200 and me['operator'], 'operator signs in with the access code')
 
-    def onboard(name, role, dept=None):
-        email = f'{role}-{RUN}@example.test'
+    def onboard(name, role, dept=None, key=None):
+        email = f'{key or role}-{RUN}@example.test'
         s, r = operator.call('POST', f'/{A}/staff', {'name': name, 'email': email, 'role': role, 'department_id': dept, 'title': 'Tester'})
         assert s == 201, (s, r)
         token = r['setupUrl'].split('/setup/')[1]
@@ -179,6 +179,155 @@ try:
     ok(s == 403, "department staff can't read the audit log")
     s, r = admin.call('GET', f'/{A}/export')
     ok(s == 200 and 'audit_log' in r and len(r['requests']) == 2, 'admins export the whole city')
+
+    # Meeting secretary: boards, agendas, notice rules, minutes, action items and publishing.
+    M = f'/{A}/meetings'
+    mviewer, _, _, _ = onboard('Mia Viewer', 'viewer', key='meetings-viewer')
+    s, _ = mviewer.call('POST', f'{M}/boards', {'name': 'Board of Aldermen'})
+    ok(s == 403, "viewers can't add boards")
+    s, r = editor.call('POST', f'{M}/boards', {'name': 'Board of Aldermen', 'schedule': 'First and third Tuesday, 6 pm', 'location': 'City Hall'})
+    ok(s == 201, 'the clerk (knowledge editor) adds a board')
+    board = r['board']['id']
+    s, _ = editor.call('POST', f'{M}/boards', {'name': 'Board of Aldermen'})
+    ok(s == 409, 'board names are unique')
+    for name, seat, role, voting in [('Jane Carter', 'Mayor', 'presiding', False), ('Tom Reed', 'Ward 1', 'member', True),
+                                     ('Lisa Grant', 'Ward 2', 'member', True), ('Sam Ortiz', 'Ward 3', 'member', True)]:
+        editor.call('POST', f'{M}/boards/{board}/members', {'name': name, 'seat': seat, 'role': role, 'voting': voting})
+    s, r = mviewer.call('GET', f'{M}/boards')
+    ok(s == 200 and len(r['boards'][0]['members']) == 4, 'everyone with dashboard access sees boards and members')
+
+    import datetime
+    day = lambda n: (datetime.date.today() + datetime.timedelta(days=n)).isoformat()
+    s, r = editor.call('POST', M, {'board_id': board, 'kind': 'regular', 'starts_at': f'{day(10)}T18:00'})
+    ok(s == 201 and r['meeting']['location'] == 'City Hall', "a meeting defaults to the board's usual place")
+    future = r['meeting']['id']
+    s, r = editor.call('POST', M, {'board_id': board, 'kind': 'regular', 'starts_at': f'{day(1)}T18:00'})
+    soon = r['meeting']['id']
+    s, r = editor.call('POST', M, {'board_id': board, 'kind': 'special', 'starts_at': f'{day(2)}T17:00'})
+    special = r['meeting']['id']
+    s, r = editor.call('GET', f'{M}/{special}')
+    ok(any(w['code'] == 'no_subject' for w in r['warnings']), 'special meetings without a stated subject are flagged (Miss. Code Ann. 25-41-13)')
+    ok(r['rules']['postWithinHours'] == 1 and r['rules']['minutesDays'] == 30, 'Mississippi cities get the Open Meetings Act defaults')
+
+    s, r = works.call('POST', f'{M}/{future}/items', {'title': 'Pine Street paving bids', 'type': 'action', 'presenter': 'Pat Works',
+                                                      'recommended_action': 'Award to Gulf Coast Paving for $184,000'})
+    ok(s == 201 and r['item']['status'] == 'submitted', 'department staff submit agenda items for the clerk')
+    paving = r['item']['id']
+    s, _ = works.call('PATCH', f'{M}/{future}/items/{paving}', {'status': 'accepted'})
+    ok(s == 403, "department staff can't put their own item on the agenda")
+    s, _ = mviewer.call('POST', f'{M}/{future}/items', {'title': 'Nope'})
+    ok(s == 403, "viewers can't submit agenda items")
+    boundary = 'chos' + RUN
+    payload = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="bid-tabulation.txt"\r\nContent-Type: text/plain\r\n\r\n'
+               f'Gulf Coast Paving $184,000\r\n--{boundary}--\r\n').encode()
+    req = urllib.request.Request(f'{ORIGIN}/api{M}/{future}/items/{paving}/files', data=payload, method='POST',
+                                 headers={'Content-Type': f'multipart/form-data; boundary={boundary}', 'User-Agent': 'CityHallOS-scripts/1.0'})
+    with works.opener.open(req) as res:
+        attachment = json.loads(res.read())['files'][0]['id']
+    ok(bool(attachment), 'the submitter attaches a file to their item')
+    s, _ = anon.call('GET', f'{M}/files/{attachment}')
+    ok(s == 404, 'attachments stay private until the agenda is published')
+    editor.call('PATCH', f'{M}/{future}/items/{paving}', {'status': 'accepted'})
+    s, r = editor.call('POST', f'{M}/{future}/items', {'title': 'Approval of the minutes', 'type': 'consent'})
+    ok(r['item']['status'] == 'accepted', "the clerk's own items go straight onto the agenda")
+    consent = r['item']['id']
+    s, r = editor.call('POST', f'{M}/{future}/items/order', {'order': [consent, paving]})
+    ok(s == 200 and [i['id'] for i in r['items'] if i['status'] == 'accepted'] == [consent, paving], 'the clerk orders the agenda')
+    s, r = editor.call('GET', f'{M}/{future}/agenda/preview')
+    ok('Consent agenda' in r['text'] and 'Pine Street paving bids' in r['text'] and 'bid-tabulation.txt' in r['text'], 'the agenda preview lists items and attachments')
+    s, _ = mviewer.call('POST', f'{M}/{future}/agenda/publish')
+    ok(s == 403, "viewers can't publish agendas")
+    s, _ = works.call('POST', f'{M}/{future}/agenda/publish')
+    ok(s == 403, "department staff can't publish agendas")
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok(s == 200 and r['meeting']['agenda_published'] is None, 'residents see a scheduled meeting but no draft agenda')
+    s, r = editor.call('POST', f'{M}/{future}/agenda/publish')
+    ok(s == 200 and r['meeting']['agenda_status'] == 'published' and not r['meeting']['agenda_late'], 'an agenda published in time is not marked late')
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok('Pine Street paving bids' in (r['meeting']['agenda_published'] or '') and r['meeting']['files'], 'residents see the published agenda')
+    with urllib.request.urlopen(urllib.request.Request(f'{ORIGIN}/api{M}/files/{attachment}', headers={'User-Agent': 'CityHallOS-scripts/1.0'})) as res:
+        ok(res.status == 200 and b'Gulf Coast' in res.read(), 'attachments become public with the agenda')
+    editor.call('POST', f'{M}/{future}/items', {'title': 'Late addition', 'type': 'discussion'})
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok('Late addition' not in r['meeting']['agenda_published'], 'later changes stay out of the published agenda until approved')
+
+    editor.call('POST', f'{M}/{soon}/items', {'title': 'Budget amendment', 'type': 'action'})
+    s, r = editor.call('POST', f'{M}/{soon}/agenda/publish')
+    ok(s == 409 and r.get('late'), 'publishing an agenda after the notice deadline is stopped with a warning')
+    s, r = editor.call('POST', f'{M}/{soon}/agenda/publish', {'acknowledgeLate': True, 'reason': 'Test of a late agenda'})
+    ok(s == 200 and r['meeting']['agenda_late'] == 1, 'the approver can publish late, and it is recorded as late')
+    s, _ = editor.call('PUT', f'{M}/settings', {'regularHours': 12})
+    ok(s == 403, "only administrators change the notice rules")
+    s, r = admin.call('PUT', f'{M}/settings', {'regularHours': 12})
+    ok(s == 200 and r['rules']['regularHours'] == 12, 'notice timing is a per-city setting')
+    s, r = editor.call('GET', f'{M}/{soon}')
+    ok(r['deadlines']['agendaHours'] == 12, 'deadlines follow the city setting')
+    s, r = operator.call('GET', f'/{B}/meetings/settings')
+    ok(r['rules']['regularHours'] == 72, "one city's rules don't change another's")
+
+    # Minutes: a recording segment through Whisper, then a draft from typed notes, then approval.
+    import io, math, struct, wave
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(b''.join(struct.pack('<h', int(3000 * math.sin(i / 8))) for i in range(16000 * 2)))
+    req = urllib.request.Request(f'{ORIGIN}/api{M}/{future}/transcribe?seq=0&total=1&source=test.wav', data=buf.getvalue(), method='POST',
+                                 headers={'Content-Type': 'audio/wav', 'User-Agent': 'CityHallOS-scripts/1.0'})
+    with editor.opener.open(req, timeout=120) as res:
+        t = json.loads(res.read())
+    ok(t.get('done') is True, 'audio segments are transcribed with Workers AI Whisper')
+    notes = ('Mayor Carter called the meeting to order at 6:01 pm. Present: Carter, Reed, Grant, Ortiz. '
+             'Consent agenda: Grant moved to approve the minutes of the last meeting, Reed seconded, all in favor. '
+             'Pine Street paving: Pat Works presented three bids. Ortiz moved to award the contract to Gulf Coast Paving for $184,000, '
+             'Grant seconded. Roll call: Reed yes, Grant yes, Ortiz yes. Carried 3-0. Pat Works to return the signed contract by the next meeting. '
+             'Adjourned 6:40 pm.')
+    s, r = editor.call('POST', f'{M}/{future}/minutes/draft', {'source': 'notes', 'notes': notes}, timeout=300)
+    ok(s == 200 and r['meeting']['minutes_status'] == 'draft' and 'Grant' in (r['meeting']['minutes_draft'] or ''), 'the AI drafts minutes from typed notes')
+    ok('Motion' in (r['meeting']['minutes_draft'] or '') or bool(r['meeting']['minutes_suggestions'].get('error')), 'draft minutes record motions')
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok(r['meeting']['minutes_approved'] is None, 'draft minutes are never public')
+    s, r = editor.call('PUT', f'{M}/{future}/minutes', {'text': '# Minutes\n\n## Pine Street paving\n\nMotion to award the Pine Street paving contract to Gulf Coast Paving for $184,000, moved by Sam Ortiz, seconded by Lisa Grant. Vote: 3 yes. The motion carried.'})
+    ok(s == 200, 'the clerk edits the draft')
+    s, _ = mviewer.call('POST', f'{M}/{future}/minutes/approve')
+    ok(s == 403, "viewers can't approve minutes")
+    s, r = editor.call('POST', f'{M}/{future}/minutes/approve')
+    ok(s == 200 and r['meeting']['minutes_status'] == 'approved', 'a person approves the minutes')
+    s, r = anon.call('GET', f'{M}/public/{future}')
+    ok('Gulf Coast Paving' in (r['meeting']['minutes_approved'] or ''), 'approved minutes are public')
+    s, r = anon.call('GET', f'{M}/public')
+    ok(any(x['id'] == future and x['has_minutes'] for x in r['meetings']), 'the public meetings list shows agendas and minutes')
+    s, r = editor.call('GET', f'/{A}/documents?category=Meetings%20%26%20Minutes')
+    titles = [d['title'] for d in r['documents']]
+    ok(any('minutes' in t for t in titles) and any('agenda' in t for t in titles), 'published agendas and approved minutes join the knowledge base')
+    s, r = editor.call('GET', f'/{A}/search?q=board%20decide%20Pine%20Street%20paving')
+    ok(bool(r['results']) and 'minutes' in r['results'][0]['title'], 'the AI City Clerk finds the decision in the minutes')
+    s, r = operator.call('GET', f'/{B}/search?q=Pine%20Street%20paving')
+    ok(not r['results'], "another city's search can't find these minutes")
+    s, r = operator.call('GET', f'/{B}/meetings/public/{future}')
+    ok(s == 404, "one city's meetings don't resolve in another")
+
+    # Action items.
+    s, r = editor.call('POST', f'{M}/{future}/actions', {'title': 'Return the signed paving contract', 'assignee_id': works_staff['id'], 'due_date': day(20)})
+    ok(s == 201 and r['action']['assignee'] == 'Pat Works', 'the clerk assigns action items to staff')
+    act = r['action']['id']
+    s, r = works.call('GET', f'{M}/actions?mine=1')
+    ok([a['id'] for a in r['actions']] == [act], 'staff see the action items assigned to them')
+    s, r = works.call('PATCH', f'{M}/actions/{act}', {'status': 'done', 'title': 'Renamed'})
+    ok(s == 200 and r['action']['status'] == 'done' and r['action']['title'] != 'Renamed', 'the assignee updates the status, nothing else')
+    s, _ = mviewer.call('PATCH', f'{M}/actions/{act}', {'status': 'open'})
+    ok(s == 403, "others can't change someone's action item")
+
+    s, r = editor.call('GET', f'/{A}/audit?type=meeting')
+    acts = {e['action'] for e in r['events']}
+    for a in ['meeting.create', 'agenda.item_submit', 'agenda.item_accepted', 'agenda.order', 'meeting.file_add', 'agenda.publish',
+              'meeting.transcribe', 'minutes.draft', 'minutes.edit', 'minutes.approve', 'action.create', 'action.update']:
+        ok(a in acts, f'audit log records {a}')
+    e = next(e for e in r['events'] if e['action'] == 'agenda.publish' and 'late' in e['summary'].lower())
+    ok('Test of a late agenda' in e['summary'], 'a late agenda records who published it and why')
+    s, r = admin.call('GET', f'/{A}/audit?type=settings')
+    ok(any(e['action'] == 'meetings.settings' and e['changes']['regularHours'] == [72, 12] for e in r['events']), 'notice rule changes are audited with before and after values')
+    s, r = admin.call('GET', f'/{A}/export')
+    ok(len(r.get('meetings', [])) == 3 and len(r.get('action_items', [])) == 1, 'the city export includes meetings')
 finally:
     for slug in (A, B):
         operator.call('PUT', f'/platform/cities/{slug}/status', {'status': 'archived'})

@@ -4,6 +4,7 @@
 // Every change made by staff, residents or the AI is written to that city's append-only audit log.
 import { DurableObject } from 'cloudflare:workers';
 import { DEFAULT_DEPARTMENTS, DEFAULT_REQUEST_TYPES } from './templates.js';
+import { MEETING_OPS, MEETING_TABLES } from './meetings-store.js';
 
 const now = () => new Date().toISOString();
 const uid = (p) => p + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
@@ -191,6 +192,130 @@ const MIGRATIONS = [
   CREATE INDEX audit_entity ON audit_log (entity_type, entity_id, id);
   CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
+  `,
+  // Meeting secretary (meetings-store.js): boards and their members, meetings, agendas, minutes and action items.
+  `
+  CREATE TABLE boards (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'board' CHECK (kind IN ('council', 'board', 'commission', 'committee', 'authority', 'other')),
+    description TEXT,
+    schedule TEXT,
+    location TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE board_members (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL REFERENCES boards(id),
+    name TEXT NOT NULL,
+    seat TEXT,
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('presiding', 'vice', 'member', 'clerk', 'attorney', 'staff')),
+    voting INTEGER NOT NULL DEFAULT 1,
+    staff_id TEXT REFERENCES staff(id),
+    term_ends TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX board_members_board ON board_members (board_id, active, sort);
+
+  -- starts_at is the city's local wall time ("2026-11-03T18:00"). Published agendas and approved minutes are
+  -- kept as snapshots, so revising a draft never changes what residents already see.
+  CREATE TABLE meetings (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL REFERENCES boards(id),
+    kind TEXT NOT NULL DEFAULT 'regular' CHECK (kind IN ('regular', 'special', 'work_session')),
+    title TEXT,
+    starts_at TEXT NOT NULL,
+    location TEXT,
+    purpose TEXT,
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'held', 'cancelled', 'postponed')),
+    called_at TEXT,
+    notice_posted_at TEXT,
+    agenda_status TEXT NOT NULL DEFAULT 'draft' CHECK (agenda_status IN ('draft', 'ready', 'published')),
+    agenda_published TEXT,
+    agenda_published_at TEXT,
+    agenda_published_by TEXT,
+    agenda_late INTEGER NOT NULL DEFAULT 0,
+    agenda_doc_id TEXT,
+    transcript TEXT,
+    transcript_status TEXT NOT NULL DEFAULT 'none' CHECK (transcript_status IN ('none', 'transcribing', 'done')),
+    transcript_progress TEXT,
+    notes TEXT,
+    minutes_status TEXT NOT NULL DEFAULT 'none' CHECK (minutes_status IN ('none', 'draft', 'approved')),
+    minutes_draft TEXT,
+    minutes_source TEXT,
+    minutes_suggestions TEXT,
+    minutes_approved TEXT,
+    minutes_approved_at TEXT,
+    minutes_approved_by TEXT,
+    minutes_doc_id TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX meetings_starts ON meetings (starts_at);
+  CREATE INDEX meetings_board ON meetings (board_id, starts_at);
+
+  CREATE TABLE agenda_items (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    ord INTEGER NOT NULL DEFAULT 0,
+    type TEXT NOT NULL DEFAULT 'action' CHECK (type IN ('consent', 'action', 'discussion', 'public_hearing', 'report')),
+    title TEXT NOT NULL,
+    description TEXT,
+    presenter TEXT,
+    department_id TEXT REFERENCES departments(id),
+    recommended_action TEXT,
+    status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'accepted', 'returned', 'withdrawn')),
+    review_note TEXT,
+    submitted_by TEXT NOT NULL,
+    submitted_by_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX agenda_items_meeting ON agenda_items (meeting_id, status, ord);
+
+  -- Agenda attachments and meeting recordings. The bytes live in R2 under {city id}/meetings/{meeting id}/.
+  CREATE TABLE meeting_files (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    item_id TEXT REFERENCES agenda_items(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('attachment', 'recording')),
+    file_key TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    mime TEXT,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    upload_id TEXT,
+    status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('uploading', 'ready')),
+    created_by TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX meeting_files_meeting ON meeting_files (meeting_id, kind);
+
+  CREATE TABLE action_items (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    item_id TEXT REFERENCES agenda_items(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    details TEXT,
+    assignee_id TEXT REFERENCES staff(id),
+    due_date TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'in_progress', 'done', 'cancelled')),
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+  );
+  CREATE INDEX action_items_status ON action_items (status, due_date);
+  CREATE INDEX action_items_assignee ON action_items (assignee_id, status);
+
+  CREATE TABLE meeting_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
 ];
 
@@ -545,6 +670,15 @@ export class CityStore extends DurableObject {
     return this.getRequest(id);
   }
 
+  /* ---------------- Meetings (meetings-store.js) ---------------- */
+
+  meetings(op, ...args) {
+    if (!Object.hasOwn(MEETING_OPS, op)) throw new Error(`Unknown meetings operation ${op}`);
+    // The operations call each other as this.row(), this.board()...; the store's own methods are on the prototype.
+    this.meetingOps ??= Object.assign(Object.create(this), MEETING_OPS);
+    return MEETING_OPS[op].apply(this.meetingOps, args);
+  }
+
   /* ---------------- Overview, audit, export ---------------- */
 
   overview(tzModifier = '+0 minutes') {
@@ -581,7 +715,7 @@ export class CityStore extends DurableObject {
 
   // Everything this city has, for backups or when a city wants its data.
   exportAll() {
-    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log'];
+    const tables = ['meta', 'departments', 'request_types', 'staff', 'documents', 'chunks', 'conversations', 'messages', 'citations', 'requests', 'request_events', 'audit_log', ...MEETING_TABLES];
     return Object.fromEntries(tables.map((t) => [t, this.all(`SELECT * FROM ${t}`)]));
   }
 
