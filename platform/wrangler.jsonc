@@ -1,0 +1,27 @@
+{
+  // City Hall OS platform: staff dashboard, knowledge base API and the embeddable AI City Clerk.
+  //   npx wrangler deploy
+  // Secrets: ADMIN_KEY (dashboard access code), ANTHROPIC_API_KEY (optional; uses Claude instead of Workers AI).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cityhallos-platform",
+  "account_id": "d06c70a0b6279642a6243926161f574b",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "cityhallos", "database_id": "d0f6c844-e64f-4e61-a8ff-95e60cf2251f" }
+  ],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "cityhallos-files" }],
+  "ai": { "binding": "AI" },
+  "ratelimits": [
+    { "name": "CHAT_LIMIT", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } }
+  ],
+  "routes": [{ "pattern": "app.cityhallos.com", "custom_domain": true }]
+}

@@ -1,0 +1,10 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/
+  X-Frame-Options: DENY
+
+/embed.js
+  Cache-Control: public, max-age=300
+  Access-Control-Allow-Origin: *

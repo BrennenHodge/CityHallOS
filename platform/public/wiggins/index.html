@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ask Wiggins | City Hall OS</title>
+  <meta name="description" content="Get answers about City of Wiggins services, permits, forms, utilities and ordinances, and report issues to the right department, 24/7.">
+  <meta name="theme-color" content="#1f5c46">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --ink: #0b1324; --muted: #5e6779; --line: #e6e2d8; --paper: #fbfaf6; --brand: #1f5c46; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body { font: 15px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; color: var(--ink); background: var(--paper); -webkit-font-smoothing: antialiased; }
+    a { color: var(--brand); }
+    .top { display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--line); background: #fff; }
+    .top img { width: 30px; height: 30px; }
+    .top strong { font-family: "Inter Tight", sans-serif; font-size: 17px; letter-spacing: -.02em; }
+    .top strong span { color: #2450e0; }
+    .top .city { margin-left: auto; font-size: 13.5px; color: var(--muted); text-align: right; }
+    .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 32px; max-width: 1180px; margin: 0 auto; padding: 32px 24px; }
+    .intro { align-self: center; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--brand); background: #e5efe9; padding: 5px 11px; border-radius: 999px; }
+    .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
+    h1 { font-family: "Inter Tight", sans-serif; font-size: clamp(32px, 4vw, 46px); line-height: 1.05; letter-spacing: -.035em; margin: 16px 0 14px; }
+    .intro p { color: var(--muted); font-size: 16.5px; margin: 0 0 22px; max-width: 470px; }
+    .facts { display: grid; gap: 10px; max-width: 470px; }
+    .fact { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 14px; }
+    .fact svg { flex: none; color: var(--brand); margin-top: 2px; }
+    .fact b { display: block; font-size: 14px; }
+    .fact span { font-size: 13.5px; color: var(--muted); }
+    #cityhallos { height: max(560px, min(760px, calc(100vh - 124px))); }
+    @media (max-width: 900px) {
+      .wrap { grid-template-columns: 1fr; height: auto; padding: 18px 16px 32px; gap: 20px; }
+      .intro { order: 2; }
+      #cityhallos { height: 78vh; }
+      .top { padding: 12px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <img src="/favicon.svg" alt="">
+    <strong>City Hall <span>OS</span></strong>
+    <div class="city">City of Wiggins<br>Stone County, Mississippi</div>
+  </header>
+  <main class="wrap">
+    <section class="intro">
+      <span class="eyebrow"><i></i> Available 24/7</span>
+      <h1>Ask Wiggins City Hall anything.</h1>
+      <p>Get answers from the city's own documents: permits and forms, water and sewer, court, ordinances and city services. Report a problem and it goes straight to the right department, with a tracking number.</p>
+      <div class="facts">
+        <div class="fact"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg><div><b>City Hall</b><span>117 First Street North, Wiggins, MS 39577</span></div></div>
+        <div class="fact"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2Z"/></svg><div><b>Phone</b><span><a href="tel:601-928-7221">601-928-7221</a> · Police non-emergency <a href="tel:601-928-5444">601-928-5444</a></span></div></div>
+        <div class="fact"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4M12 17h.01"/></svg><div><b>Emergencies</b><span>Call <a href="tel:911">911</a>. This assistant can't dispatch emergency services.</span></div></div>
+      </div>
+    </section>
+    <section id="cityhallos" aria-label="Ask Wiggins chat"></section>
+  </main>
+  <script src="/embed.js?v=3" data-city="wiggins" data-mode="page" data-target="#cityhallos"></script>
+</body>
+</html>
