@@ -32,5 +32,29 @@
     { "name": "CHAT_LIMIT", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
     { "name": "LOGIN_LIMIT", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }
   ],
-  "routes": [{ "pattern": "app.cityhallos.com", "custom_domain": true }]
+  "routes": [{ "pattern": "app.cityhallos.com", "custom_domain": true }],
+
+  // Staging: the same code at staging.cityhallos.com with its own database, files and city stores.
+  //   npx wrangler deploy --env staging
+  "env": {
+    "staging": {
+      "routes": [{ "pattern": "staging.cityhallos.com", "custom_domain": true }],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "cityhallos-staging", "database_id": "a88f38be-ab9e-489b-9805-e4d3c532cb8b" }
+      ],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "cityhallos-files-staging" }],
+      "ai": { "binding": "AI" },
+      "durable_objects": {
+        "bindings": [
+          { "name": "CITY_STORE", "class_name": "CityStore" },
+          { "name": "AUTH", "class_name": "AuthService" }
+        ]
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CityStore", "AuthService"] }],
+      "ratelimits": [
+        { "name": "CHAT_LIMIT", "namespace_id": "2001", "simple": { "limit": 20, "period": 60 } },
+        { "name": "LOGIN_LIMIT", "namespace_id": "2002", "simple": { "limit": 10, "period": 60 } }
+      ]
+    }
+  }
 }

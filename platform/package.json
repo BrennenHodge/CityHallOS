@@ -3,7 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --port 8787",
+    "reset": "python -I scripts/dev_reset.py",
+    "test": "python -I scripts/test_api.py http://127.0.0.1:8787 .dev.vars",
+    "test:staging": "python -I scripts/test_api.py https://staging.cityhallos.com ../.secrets/staging-admin-key.txt",
+    "deploy:staging": "wrangler deploy --env staging",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

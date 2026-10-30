@@ -1,12 +1,18 @@
 """Load the Wiggins research pack and crawl into the City Hall OS knowledge base.
+Replaces every document already in the city's knowledge base. Usually run through load_city.py.
 
 Usage: python -I seed.py <api_base> <key_file> <data_dir> <pack_dir>
+  api_base  e.g. http://127.0.0.1:8787/api/wiggins
+  key_file  a file holding the access code, or platform/.dev.vars
 """
 import json, re, sys, uuid, urllib.request, csv
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from chos import read_key  # noqa: E402
+
 API, KEY_FILE, DATA, PACK = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4])
-KEY = KEY_FILE.read_text().strip()
+KEY = read_key(KEY_FILE)
 BASE = 'https://www.cityofwiggins.gov'
 
 

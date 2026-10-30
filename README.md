@@ -72,8 +72,42 @@ The "Book a walkthrough" form shows a success state but **does not send anywhere
 leads, set a `data-endpoint` attribute on `<form id="contactForm">` to any endpoint that accepts a JSON
 POST (Formspree, a Cloudflare Pages Function, a CRM webhook, and so on).
 
+### Development workflow
+
+Three environments run the same code, each with its own data and its own access code:
+
+| Environment | Where | Data | Access code |
+|---|---|---|---|
+| Local | http://127.0.0.1:8787 | Rebuilt on your computer from public city documents | `ADMIN_KEY` in `platform/.dev.vars` |
+| Staging | https://staging.cityhallos.com | Its own database and files | `.secrets/staging-admin-key.txt` |
+| Production | https://app.cityhallos.com | Real residents and staff | `.secrets/wiggins-admin-key.txt` |
+
+Everything runs on Cloudflare's own runtime, locally too (`wrangler dev` simulates D1, R2 and Durable Objects on disk under
+`platform/.wrangler/state`), so there is no Docker. Workers AI is always remote, even locally.
+
+From `platform/`:
+
+```bash
+npm run reset           # wipe local data and rebuild every city in cities/ from seed-data/ (stop the server first)
+npm run dev             # start the local server on port 8787
+npm test                # run the end-to-end checks against the local server
+npm run deploy:staging  # deploy to staging, then: npm run test:staging
+npm run deploy          # deploy to production
+```
+
+After a reset, sign in locally as `DEV_ADMIN_EMAIL` with `DEV_ADMIN_PASSWORD` from `platform/.dev.vars`
+(copy `.dev.vars.example` the first time). The test suite creates throwaway cities, archives them afterward and
+refuses to run against production.
+
 ### Loading a city's knowledge
 
-[`platform/scripts`](platform/scripts) holds the repeatable import used for Wiggins:
-`crawl.py` downloads the city website's pages and Document Center files, `seed.py` loads them (plus a research pack)
-through the documents API, and `ask.py` runs test questions against the live assistant.
+Each city is defined in `platform/cities/<slug>.json` (name, county, request prefix, assistant settings). Its source
+documents live in `platform/seed-data/<slug>/` (gitignored): `data/` from `scripts/crawl.py` and `pack/` from the
+research pack. `scripts/load_city.py` adds the city to any environment and loads its knowledge base:
+
+```bash
+python -I platform/scripts/load_city.py https://staging.cityhallos.com .secrets/staging-admin-key.txt platform/cities/wiggins.json
+```
+
+It won't overwrite a city that already has documents unless you pass `--replace-knowledge`. `scripts/ask.py` runs test
+questions against an assistant.

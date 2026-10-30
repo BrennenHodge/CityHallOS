@@ -5,3 +5,5 @@ node_modules/
 Thumbs.db
 .secrets/
 platform/.dev.vars
+platform/seed-data/
+__pycache__/
